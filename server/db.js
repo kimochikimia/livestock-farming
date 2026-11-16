@@ -196,6 +196,13 @@ async function init() {
   await ensureColumn('animals', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Худалдаж авсан'");
   await ensureColumn('animals', 'mother_tag', 'VARCHAR(50) NULL');
   await ensureColumn('animals', 'market_value', 'DOUBLE NULL');
+  // Хөрөнгө оруулагч (partners): хөрөнгө, олгох давтамж, хугацаа
+  await ensureColumn('partners', 'phone', 'VARCHAR(20) NULL');
+  await ensureColumn('partners', 'invested', 'DOUBLE NULL');
+  await ensureColumn('partners', 'payout_period', 'VARCHAR(40) NULL');
+  await ensureColumn('partners', 'start_date', 'DATE NULL');
+  await ensureColumn('partners', 'end_date', 'DATE NULL');
+  await ensureColumn('partners', 'note', 'VARCHAR(500) NULL');
   return db;
 }
 

@@ -415,6 +415,7 @@ select::-ms-expand { display: none; }
 .att-item.info { border-left-color: var(--series-1); } .att-item.info .att-icon { background: var(--series-1); }
 .att-item.good { border-left-color: var(--st-good); } .att-item.good .att-icon { background: var(--st-good); }
 .grid2:empty { display: none; }
+.investors-box { margin-top: 18px; }
 
 /* ---------- Сэлгэх товч (Жагсаалт / Календарь) ---------- */
 .seg-group { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; gap: 2px; }

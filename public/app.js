@@ -113,7 +113,7 @@ function numberInput(attrs = {}, initial) {
 
 const BADGE = {
   'Борлуулах': 'green', 'Хүрээгүй': 'amber', 'Тохиргоо олдсонгүй': 'gray',
-  'Төлөвлөсөн': 'blue', 'Хийгдсэн': 'green', 'Цуцалсан': 'gray', 'Хүлээгдэж буй': 'amber', 'Бүртгэсэн': 'green', 'Зарах малд': 'blue', 'Гараар нэмсэн': 'gray',
+  'Төлөвлөсөн': 'blue', 'Хийгдсэн': 'green', 'Цуцалсан': 'gray', 'Хүлээгдэж буй': 'amber', 'Бүртгэсэн': 'green', 'Хүчинтэй': 'green', 'Эхлээгүй': 'blue', 'Дууссан': 'gray', 'Зарах малд': 'blue', 'Гараар нэмсэн': 'gray',
   'Идэвхтэй': 'blue', 'Товлосон': 'amber', 'Бойлсон': 'gray', 'Зарагдсан': 'green',
   pending: 'amber', approved: 'green', rejected: 'red', blocked: 'red'
 };
@@ -1000,10 +1000,12 @@ PAGES.dashboard = async main => {
         h('table', { class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', { class: 'num' }, 'Жин'))),
           h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null),
-    d.partners.length ? h('section', { class: 'card' }, h('h2', {}, 'Ашиг хуваарилалт'),
+    d.partners.length ? h('section', { class: 'card' },
+      h('div', { class: 'toolbar' }, h('h2', {}, 'Хөрөнгө оруулагчдын ашиг'), farmFull() ? h('a', { class: 'btn ghost small', href: '#/settings?tab=general' }, 'Удирдах') : null),
       h('table', { class: 'data compact' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Дүн'))),
-        h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount))))))) : null);
+        h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', {}, 'Олгох давтамж'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Ашгийн дүн'))),
+        h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name, investorState(p) !== 'Хүчинтэй' ? h('span', {}, ' ', badge(investorState(p))) : null),
+          h('td', {}, p.payout_period || ''), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount))))))) : null);
 };
 
 PAGES.animals = main => crudSection(main, {
@@ -1626,13 +1628,43 @@ const SETTING_TABS = [
       { k: 'breeding_months', label: 'Хээлтүүлэх сар' },
       { k: 'birthing_months', label: 'Төллөх сар' }
     ] }) },
-  { id: 'partners', label: 'Ашиг хуваарилалт', cfg: () => ({
-    res: 'partners', title: 'Ашиг хуваарилалт', itemName: 'хувьцаа эзэмшигч', write: 'admin', rowActions: true,
-    columns: [{ k: 'name', label: 'Нэр' }, { k: 'percent', label: 'Хувь', f: 'pct' }],
-    totals: ['percent'],
-    fields: [{ k: 'name', label: 'Нэр', req: true }, { k: 'percent', label: 'Хувь (%)', type: 'number', req: true, max: 100 }] }) },
   { id: 'general', label: 'Ерөнхий' }
 ];
+
+// Хөрөнгө оруулагчид — ашгийн хувь, олгох давтамж, хугацаа (Тохиргоо → Ерөнхий)
+const PAYOUT_PERIODS = ['Сар бүр', 'Улирал бүр', 'Хагас жил бүр', 'Жил бүр', 'Борлуулалт бүрийн дараа', 'Гэрээний төгсгөлд'];
+const INVESTOR_CFG = () => ({
+  res: 'partners', title: 'Хөрөнгө оруулагчид', itemName: 'хөрөнгө оруулагч', addLabel: '+ Хөрөнгө оруулагч нэмэх', write: 'admin',
+  columns: [
+    { k: 'name', label: 'Нэр' },
+    { k: 'phone', label: 'Утас' },
+    { k: 'invested', label: 'Оруулсан хөрөнгө', f: 'money' },
+    { k: 'percent', label: 'Ашгийн хувь', f: 'pct' },
+    { k: 'payout_period', label: 'Олгох давтамж' },
+    { k: 'period', label: 'Хугацаа', render: r => (r.start_date || r.end_date ? `${r.start_date || '…'} – ${r.end_date || '…'}` : ''),
+      csv: r => `${r.start_date || ''} – ${r.end_date || ''}` },
+    { k: 'term_state', label: 'Төлөв', render: r => badge(investorState(r)), csv: r => investorState(r) },
+    { k: 'note', label: 'Тэмдэглэл', cls: 'note-cell' }
+  ],
+  totals: ['invested', 'percent'],
+  fields: [
+    { k: 'name', label: 'Нэр', req: true, maxlength: 100 },
+    { k: 'phone', label: 'Утас', type: 'tel', maxlength: 20 },
+    { k: 'invested', label: 'Оруулсан хөрөнгө ₮', type: 'number' },
+    { k: 'percent', label: 'Ашгийн хувь (%)', type: 'number', req: true, max: 100 },
+    { k: 'payout_period', label: 'Олгох давтамж', type: 'select', options: () => opt(PAYOUT_PERIODS), full: true },
+    { k: 'start_date', label: 'Эхлэх огноо', type: 'date' },
+    { k: 'end_date', label: 'Дуусах огноо', type: 'date' },
+    { k: 'note', label: 'Тэмдэглэл', type: 'textarea', full: true }
+  ]
+});
+// Гэрээний хугацааны төлөв
+function investorState(r) {
+  const t = today();
+  if (r.start_date && t < r.start_date) return 'Эхлээгүй';
+  if (r.end_date && t > r.end_date) return 'Дууссан';
+  return 'Хүчинтэй';
+}
 
 PAGES.settings = async main => {
   const tabId = new URLSearchParams(location.hash.split('?')[1] || '').get('tab') || 'members';
@@ -1775,6 +1807,7 @@ function generalSettings(box) {
   const name = h('input', { maxlength: 100, required: true, value: farm.name || '' });
   const note = h('textarea', { rows: 3, maxlength: 500 }); note.value = farm.note || '';
   const msg = h('div', { class: 'form-msg' });
+  const investorsBox = h('div', { class: 'investors-box' });
   box.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Ерөнхий'),
     h('form', {
       onsubmit: async e => {
@@ -1790,7 +1823,9 @@ function generalSettings(box) {
     h('div', { class: 'form-grid' },
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
-    msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))));
+    msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))),
+    investorsBox);
+  crudSection(investorsBox, INVESTOR_CFG()).catch(e => investorsBox.replaceChildren(h('div', { class: 'card error-card' }, e.message)));
 }
 
 // Тэжээлийн өртгийн тооцооны тохиргоо (хоног, бусад төсөв, малын төрөл, тоо) — "Тэжээл" хуудаснаас засна

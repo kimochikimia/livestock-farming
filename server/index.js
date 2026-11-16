@@ -640,7 +640,7 @@ app.put('/api/r/:res/:id', async (req, res) => {
   const id = idParam(req);
   const v = validate(r.fields, req.body || {});
   const desc = describe(r, v);
-  if (r.prepare) await r.prepare(v, db, req.farm.id);
+  if (r.prepare) await r.prepare(v, db, req.farm.id, id);
   const keys = Object.keys(v);
   const info = await db.run(`UPDATE ${r.table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND farm_id = ?`,
     [...keys.map(k => v[k]), id, req.farm.id]);

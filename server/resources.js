@@ -10,6 +10,7 @@ const SPECIES = ['Үхэр', 'Хонь', 'Ямаа', 'Адуу', 'Тэмээ'];
 const SEXES = ['Эр', 'Эм', 'Зассан эр'];
 const TASK_STATUSES = ['Төлөвлөсөн', 'Хийгдсэн', 'Цуцалсан'];
 const SOURCES = ['Худалдаж авсан', 'Төл', 'Бэлэг']; // Малын орлогын төрөл
+const PAYOUT_PERIODS = ['Сар бүр', 'Улирал бүр', 'Хагас жил бүр', 'Жил бүр', 'Борлуулалт бүрийн дараа', 'Гэрээний төгсгөлд'];
 // Тэжээлийн жорын багана ↔ тэжээлийн нэр
 const RECIPE_FEEDS = {
   hay: 'Өвс (хадлан)', alfalfa: 'Царгас', straw: 'Сүрэл', bran: 'Хивэг',
@@ -413,10 +414,22 @@ const resources = {
     }
   },
   partners: {
-    table: 'partners', title: 'Ашиг хуваарилалт', settings: true, describe: v => v.name,
+    table: 'partners', title: 'Хөрөнгө оруулагч', settings: true, describe: v => `${v.name} ${v.percent}%`,
     fields: {
       name: { t: 'text', req: true, max: 100, label: 'Нэр' },
-      percent: { t: 'num', req: true, max: 100, label: 'Хувь (%)' }
+      phone: { t: 'text', max: 20, label: 'Утас' },
+      invested: { t: 'num', label: 'Оруулсан хөрөнгө' },
+      percent: { t: 'num', req: true, max: 100, label: 'Ашгийн хувь (%)' },
+      payout_period: { t: 'text', options: PAYOUT_PERIODS, label: 'Олгох давтамж' },
+      start_date: { t: 'date', label: 'Эхлэх огноо' },
+      end_date: { t: 'date', label: 'Дуусах огноо' },
+      note: { t: 'text', max: 500, label: 'Тэмдэглэл' }
+    },
+    // Нийт ашгийн хувь 100%-иас хэтрэхгүй; дуусах огноо эхлэхээс өмнө байж болохгүй
+    async prepare(v, db, farmId, id) {
+      if (v.start_date && v.end_date && v.end_date < v.start_date) throw new HttpError(400, 'Дуусах огноо эхлэх огнооноос өмнө байж болохгүй');
+      const { s } = await db.one('SELECT COALESCE(SUM(percent), 0) s FROM partners WHERE farm_id = ? AND id <> ?', [farmId, id || 0]);
+      if (s + v.percent > 100 + 1e-9) throw new HttpError(400, `Нийт ашгийн хувь 100%-иас хэтэрнэ (бусад: ${s}%, энэ: ${v.percent}%)`);
     }
   }
 };
