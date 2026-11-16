@@ -233,7 +233,9 @@ function navGroup(g, path) {
 function topbar(item) {
   return h('header', { class: 'topbar' },
     h('button', { class: 'menu-btn', 'aria-label': 'Цэс', onclick: () => document.body.classList.toggle('nav-open') }, '☰'),
-    h('h1', {}, item.label));
+    h('h1', {}, item.label),
+    // Утсан дээр (цэс хаалттай үед) аль ферм дээр ажиллаж байгааг харуулна
+    item.farm && state.lk?.farm ? h('a', { class: 'topbar-farm', href: '#/farms' }, state.lk.farm.name) : null);
 }
 
 async function logout() {
@@ -402,9 +404,12 @@ function enhanceTable(table) {
   };
   const sortKey = t => { const n = Number(t.replace(/[^\d.-]/g, '')); return /\d/.test(t) && /^[\d\s,.\-₮%кг/]+$/i.test(t.replace(/\s+/g, ' ')) && !isNaN(n) ? n : t; };
   let busy = false;
+  const headLabels = ths.map(th => th.textContent.replace(/[▲▼]/g, '').trim());
   function apply() {
     busy = true;
     const rows = [...tbody.rows].filter(tr => !tr.querySelector('td.empty'));
+    // Утсан дээр карт хэлбэрээр харуулахад нүд бүрт баганын нэр
+    for (const tr of rows) [...tr.cells].forEach((td, i) => { if (!td.hasAttribute('data-label') && headLabels[i]) td.setAttribute('data-label', headLabels[i]); });
     if (sortState.i >= 0) {
       rows.sort((a, b) => sortState.dir * compareValues(sortKey(textOf(a, sortState.i)), sortKey(textOf(b, sortState.i))));
       for (const tr of rows) tbody.append(tr);
@@ -493,7 +498,7 @@ async function crudSection(container, cfg) {
     tfoot.replaceChildren();
     if (cfg.totals && list.length) {
       tfoot.append(h('tr', {}, cfg.columns.map((c, i) => {
-        if (cfg.totals.includes(c.k)) return h('td', { class: 'num' }, FMT[c.f || 'num'](list.reduce((s, r) => s + (Number(r[c.k]) || 0), 0)));
+        if (cfg.totals.includes(c.k)) return h('td', { class: 'num', 'data-label': c.label }, FMT[c.f || 'num'](list.reduce((s, r) => s + (Number(r[c.k]) || 0), 0)));
         return h('td', {}, i === 0 ? 'Нийт' : '');
       }), showActions ? h('td') : null));
     }

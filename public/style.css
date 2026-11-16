@@ -431,3 +431,80 @@ dialog.auth-dialog { width: min(440px, calc(100vw - 24px)); }
 @media (max-width: 420px) {
   .lp-brand span:last-child { display: none; }
 }
+
+/* =====================================================================
+   Гар утас / таблет — саадгүй ашиглах
+   ===================================================================== */
+/* Нарийн дэлгэцэд картууд хальж гарахгүй */
+.farm-grid { grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); }
+.lp-features { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.lp-news { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.lp-stats { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+.kpis { grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); }
+.kv-grid { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+dialog.modal { overflow-y: auto; overscroll-behavior: contain; }
+.modal-actions { flex-wrap: wrap; }
+.topbar-farm { display: none; text-decoration: none; }
+
+@media (max-width: 900px) {
+  /* iPhone: 16px-ээс жижиг талбар дээр дарахад дэлгэц томордог — 16px болгоно */
+  input, select, textarea { font-size: 16px; }
+  /* Хуруугаар дарахад хангалттай том товч */
+  .btn { min-height: 40px; }
+  .btn.small { min-height: 36px; }
+  .btn.xs { min-height: 30px; padding: 4px 10px; }
+  .nav-link { padding: 11px 10px; }
+  .icon-btn { min-width: 40px; min-height: 40px; }
+  /* Цэс хаалттай үед ч аль ферм дээр ажиллаж байгааг харуулна */
+  .topbar { flex-wrap: wrap; row-gap: 2px; }
+  .topbar h1 { font-size: 18px; }
+  .topbar-farm { display: block; width: 100%; padding-left: 52px; margin-top: -4px; font-size: 12px; color: var(--brand); font-weight: 600; }
+  .tabs.page-tabs { scrollbar-width: none; }
+  .tabs.page-tabs::-webkit-scrollbar { display: none; }
+  .toolbar h2 { width: 100%; }
+}
+
+@media (max-width: 640px) {
+  .main { padding: 8px 12px 28px; gap: 14px; }
+  .card { padding: 14px 12px; border-radius: 12px; }
+  dialog.modal { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }
+  .modal-head { padding: 14px 16px; }
+  .modal-body { padding: 14px 16px 0; }
+  .modal-actions .spacer { flex-basis: 100%; height: 0; }
+  .modal-actions .btn { flex: 1 1 auto; }
+  .toolbar-right .search { order: -1; flex-basis: 100%; }
+  #toasts { left: 12px; right: 12px; bottom: 12px; }
+  .toast { text-align: center; }
+
+  /* Өргөн хүснэгтийг утсан дээр мөр бүрийг карт болгон харуулна (баганын нэр — зүүн, утга — баруун) */
+  .table-wrap:has(> table.data:not(.compact)) { border: none; overflow: visible; }
+  table.data:not(.compact) { display: block; border: none; }
+  table.data:not(.compact) thead { display: none; }
+  table.data:not(.compact) tbody, table.data:not(.compact) tfoot { display: block; }
+  table.data:not(.compact) tr { display: block; border: 1px solid var(--border); border-radius: 12px; padding: 4px 12px; margin-bottom: 10px; background: var(--surface); }
+  table.data:not(.compact) tr.clickable:active { background: var(--brand-soft); }
+  table.data:not(.compact) tr[hidden] { display: none; }
+  table.data:not(.compact) td {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    border: none !important; border-bottom: 1px dashed var(--border) !important;
+    padding: 7px 0; text-align: right; white-space: normal; background: none !important; min-height: 34px;
+  }
+  table.data:not(.compact) td:last-child { border-bottom: none !important; }
+  table.data:not(.compact) td::before { content: attr(data-label); color: var(--muted); font-weight: 600; font-size: 12px; text-align: left; flex: none; max-width: 48%; }
+  table.data:not(.compact) td:not([data-label])::before, table.data:not(.compact) td[data-label=""]::before { content: none; }
+  table.data:not(.compact) td:empty { display: none; }
+  table.data:not(.compact) td.row-actions, table.data:not(.compact) td.approve-cell { justify-content: flex-end; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
+  table.data:not(.compact) td.row-actions .btn { flex: 1 1 auto; }
+  table.data:not(.compact) td.empty { justify-content: center; border: none !important; color: var(--muted); }
+  table.data:not(.compact) td.note-cell { max-width: none; }
+  table.data:not(.compact) tfoot tr { background: var(--surface-2); }
+  table.data:not(.compact) tfoot td { border-top: none; }
+  table.data:not(.compact) .cell-thumb { width: 56px; height: 56px; }
+  table.data:not(.compact) tr.pending-row td { background: none !important; }
+  table.data:not(.compact) tr.pending-row { border-color: var(--amber); background: var(--amber-soft); }
+  .table-foot { padding: 0 2px; }
+  .farm-actions { flex-wrap: wrap; }
+  .farm-actions .btn.primary { flex: 1 1 100%; }
+  .lightbox-img { max-width: 100vw; max-height: calc(100dvh - 90px); border-radius: 0; }
+  .lb-prev, .lb-next { top: auto; bottom: 16px; transform: none; }
+}
