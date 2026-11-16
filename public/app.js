@@ -64,6 +64,10 @@ function toast(msg, type = 'ok') {
   setTimeout(() => t.remove(), 3700);
 }
 
+// Гэнэтийн алдааг чимээгүй өнгөрөөхгүй — дэлгэцэнд мэдэгдэнэ
+window.addEventListener('error', e => { if (e.message) toast('Алдаа гарлаа: ' + e.message, 'err'); });
+window.addEventListener('unhandledrejection', e => { const m = e.reason?.message || String(e.reason || ''); if (m) toast('Алдаа гарлаа: ' + m, 'err'); });
+
 const nf0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const nf2 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
@@ -1304,7 +1308,7 @@ const TASK_FIELDS = [
   { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
   { k: 'type', label: 'Ажил', type: 'select', req: true, options: () => opt(state.lk.suggest.taskType) },
   { k: 'tag_id', label: 'Мал', type: 'multi', full: true, options: () => activeTags(),
-    showIf: v => !!state.lk.taskTypes.find(t => t.name === v.type)?.needs_animals },
+    showIf: v => !!(state.lk.suggest.taskTypes || []).find(t => t.name === v.type)?.needs_animals },
   { k: 'assignee', label: 'Хариуцагч', maxlength: 100, suggest: () => state.lk.suggest.assignee },
   { k: 'status', label: 'Төлөв', type: 'select', req: true, options: () => opt(TASK_STATUSES), def: 'Төлөвлөсөн' },
   { k: 'done_date', label: 'Хийсэн огноо', type: 'date' },
