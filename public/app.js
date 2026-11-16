@@ -1368,7 +1368,9 @@ PAGES.feed = async main => {
   const heads = s.plan_head_count !== '' && s.plan_head_count != null ? Number(s.plan_head_count) : autoHeads;
   const perDayHead = perHead / days;
   const kv = (k, v, strong) => h('div', { class: 'kv' + (strong ? ' strong' : '') }, h('span', {}, k), h('span', {}, v));
-  summaryBox.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Тэжээлийн өртгийн тооцоо'),
+  summaryBox.replaceChildren(h('section', { class: 'card' },
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Тэжээлийн өртгийн тооцоо'),
+      farmFull() ? h('div', { class: 'toolbar-right' }, h('button', { class: 'btn ghost small', type: 'button', onclick: () => openFeedPlanSettings(rerender) }, 'Засах')) : null),
     h('div', { class: 'kv-grid' },
       kv('Тэжээлийн нийт өртөг (1 толгой)', FMT.money(perHead - (Number(s.plan_other_budget) || 0))),
       kv('Маллагаа, ус, мал эмнэлэг бусад төсөв', FMT.money(Number(s.plan_other_budget) || 0)),
@@ -1589,34 +1591,56 @@ async function membersSettings(box) {
     h('div', { class: 'table-foot' }, h('span', { class: 'muted small' }, members.length + ' гишүүн'))));
 }
 
+// Ерөнхий: фермийн нэр, тэмдэглэл (тэжээлийн төлөвлөгөөний тохиргоо "Тэжээл" хуудсанд байна)
 function generalSettings(box) {
-  const s = state.lk.settings;
-  const defs = [
-    ['plan_days', 'Тэжээлийн төлөвлөгөөний хоног', 'number'],
-    ['plan_other_budget', 'Маллагаа, ус, мал эмнэлэг бусад төсөв (1 толгой) ₮', 'number'],
-    ['plan_species', 'Төлөвлөгөөний малын төрөл', 'select'],
-    ['plan_head_count', 'Малын тоо', 'number']
-  ];
-  const ctrls = {};
+  const farm = state.lk.farm;
+  const name = h('input', { maxlength: 100, required: true, value: farm.name || '' });
+  const note = h('textarea', { rows: 3, maxlength: 500 }); note.value = farm.note || '';
   const msg = h('div', { class: 'form-msg' });
-  const grid = h('div', { class: 'form-grid' }, defs.map(([k, label, type, help]) => {
-    ctrls[k] = type === 'select'
-      ? h('select', { name: k }, state.lk.species.map(sp => h('option', { value: sp, selected: s[k] === sp }, sp)))
-      : type === 'number' ? numberInput({ name: k }, s[k]) : h('input', { name: k, type, value: s[k] ?? '' });
-    return field(label, ctrls[k], help);
-  }));
-  box.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Ерөнхий тохиргоо'),
+  box.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Ерөнхий'),
     h('form', {
       onsubmit: async e => {
         e.preventDefault();
         try {
-          await api('PUT', '/api/settings', Object.fromEntries(Object.entries(ctrls).map(([k, el]) => [k, el.value])));
-          await loadLookups(); toast('Тохиргоо хадгалагдлаа');
+          await api('PATCH', `/api/farms/${farm.id}`, { name: name.value, note: note.value });
+          await loadLookups(); toast('Хадгаллаа');
           document.querySelector('.sidebar').replaceWith(sidebar('settings'));
-          msg.className = 'form-msg';
+          msg.className = 'form-msg'; msg.textContent = '';
         } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
       }
-    }, grid, msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))));
+    },
+    h('div', { class: 'form-grid' },
+      h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
+      h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
+    msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))));
+}
+
+// Тэжээлийн өртгийн тооцооны тохиргоо (хоног, бусад төсөв, малын төрөл, тоо) — "Тэжээл" хуудаснаас засна
+function openFeedPlanSettings(onDone) {
+  const s = state.lk.settings;
+  const days = numberInput({ required: true }, s.plan_days);
+  const other = numberInput({}, s.plan_other_budget);
+  const species = h('select', {}, state.lk.species.map(sp => h('option', { value: sp, selected: s.plan_species === sp }, sp)));
+  const heads = numberInput({}, s.plan_head_count);
+  const msg = h('div', { class: 'form-msg' });
+  const form = h('form', { class: 'modal-body' },
+    h('div', { class: 'form-grid' },
+      field('Төлөвлөгөөний хоног *', days),
+      field('Маллагаа, ус, мал эмнэлэг бусад төсөв (1 толгой) ₮', other),
+      field('Малын төрөл', species),
+      field('Малын тоо', heads)),
+    msg,
+    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
+      h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')));
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      await api('PUT', '/api/settings', { plan_days: days.value, plan_other_budget: other.value, plan_species: species.value, plan_head_count: heads.value });
+      dlg.close(); toast('Хадгаллаа'); onDone();
+    } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
+  });
+  const dlg = modal('Тэжээлийн өртгийн тооцоо', form);
 }
 
 // ----- Хэрэглэгчид (админ) -----

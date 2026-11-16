@@ -487,7 +487,7 @@ app.get('/api/lookups', async (req, res) => {
   const col = async (sql, params) => (await db.q(sql, params)).map(r => r.v);
   const owner = await db.one('SELECT name FROM users WHERE id = ?', [req.farm.owner_id]);
   res.json({
-    farm: { id: req.farm.id, name: req.farm.name, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
+    farm: { id: req.farm.id, name: req.farm.name, note: req.farm.note, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
     species: SPECIES,
     sexes: SEXES,
     classes: await db.q('SELECT species, age_name, age, sex, target_weight FROM animal_classes WHERE farm_id = ? ORDER BY id', [fid]),
