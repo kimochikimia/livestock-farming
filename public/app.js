@@ -1457,8 +1457,20 @@ const SETTING_TABS = [
 PAGES.settings = async main => {
   const tabId = new URLSearchParams(location.hash.split('?')[1] || '').get('tab') || 'members';
   const box = h('div');
+  // Excel-ийн загвар тохиргоог (ангилал, тэжээл, төрлүүд, төллөлт, тэжээлийн төлөвлөгөө) нэг дор оруулна
+  const templateBtn = h('button', { type: 'button', class: 'btn ghost small', onclick: async () => {
+    if (!confirm('Excel-ийн загвар тохиргоог энэ фермд оруулах уу?\nОдоо байгаа тохиргоо өөрчлөгдөхгүй, зөвхөн дутуу зүйлс нэмэгдэнэ.')) return;
+    templateBtn.disabled = true;
+    try {
+      const r = await api('POST', '/api/settings/template');
+      toast(r.total ? `${r.total} тохиргоо нэмэгдлээ` : 'Бүх загвар тохиргоо аль хэдийн байна');
+      await loadLookups(); render();
+    } catch (e) { toast(e.message, 'err'); templateBtn.disabled = false; }
+  } }, 'Загвар тохиргоо оруулах');
   main.replaceChildren(
-    h('div', { class: 'tabs page-tabs' }, SETTING_TABS.map(t => h('a', { class: 'tab' + (t.id === tabId ? ' active' : ''), href: '#/settings?tab=' + t.id }, t.label))),
+    h('div', { class: 'settings-head' },
+      h('div', { class: 'tabs page-tabs' }, SETTING_TABS.map(t => h('a', { class: 'tab' + (t.id === tabId ? ' active' : ''), href: '#/settings?tab=' + t.id }, t.label))),
+      templateBtn),
     box);
   const tab = SETTING_TABS.find(t => t.id === tabId) || SETTING_TABS[0];
   if (tab.id === 'general') return generalSettings(box);
@@ -1724,14 +1736,17 @@ PAGES.farms = async main => {
   function farmForm(f) {
     const name = h('input', { maxlength: 100, required: true, value: f?.name || '' });
     const note = h('textarea', { rows: 2, maxlength: 500 }); note.value = f?.note || '';
-    const copy = h('select', {}, h('option', { value: '' }, '— Хоосон эхлэх —'),
-      farms.map(x => h('option', { value: x.id }, x.name + (x.mine ? '' : ` (${x.owner_name})`))));
+    // Анхдагч: Excel-ийн загвар тохиргоо; эсвэл өөр фермээс хуулах; эсвэл хоосон
+    const copy = h('select', {},
+      h('option', { value: 'template', selected: true }, 'Загвар тохиргоо (Excel)'),
+      h('option', { value: '' }, 'Хоосон эхлэх'),
+      farms.map(x => h('option', { value: x.id }, `"${x.name}" фермээс хуулах` + (x.mine ? '' : ` (${x.owner_name})`))));
     const msg = h('div', { class: 'form-msg' });
     const form = h('form', { class: 'modal-body' },
       h('div', { class: 'form-grid' },
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note),
-        !f && farms.length ? h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тохиргоог хуулах'), copy) : null),
+        !f ? h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тохиргоо'), copy) : null),
       msg,
       h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),

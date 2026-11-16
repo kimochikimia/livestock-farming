@@ -9,6 +9,7 @@ const { rateLimit } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const { db, init, audit, getSettings, setSetting, SETTING_KEYS, ensureAdmin, UPLOAD_DIR, copyFarmSettings } = require('./db');
 const { resources, validate, HttpError, mapDbError, SPECIES, SEXES } = require('./resources');
+const { applyTemplate } = require('./template');
 
 const PROD = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT) || 3000;
@@ -286,7 +287,8 @@ app.post('/api/farms', need('viewer'), async (req, res) => {
   const name = checkName(req.body.name, 'Фермийн нэрийг', 100);
   const note = req.body.note ? String(req.body.note).trim().slice(0, 500) : null;
   let copyFrom = null;
-  if (req.body.copy_from) {
+  const useTemplate = req.body.copy_from === 'template';
+  if (req.body.copy_from && !useTemplate) {
     copyFrom = await db.one('SELECT * FROM farms WHERE id = ?', [Number(req.body.copy_from)]);
     const member = copyFrom && await db.one('SELECT 1 x FROM farm_members WHERE farm_id = ? AND user_id = ?', [copyFrom.id, req.user.id]);
     if (!canAccessFarm(req.user, copyFrom) && !member) throw new HttpError(400, 'Тохиргоо хуулах ферм олдсонгүй');
@@ -294,9 +296,10 @@ app.post('/api/farms', need('viewer'), async (req, res) => {
   const id = await db.tx(async c => {
     const { insertId } = await c.run('INSERT INTO farms(name, note, owner_id) VALUES(?, ?, ?)', [name, note, req.user.id]);
     if (copyFrom) await copyFarmSettings(c, copyFrom.id, insertId);
+    if (useTemplate) await applyTemplate(c, insertId);
     return insertId;
   });
-  await audit(req.user.id, 'Ферм үүсгэв', 'farms', id, name + (copyFrom ? ` (тохиргоог "${copyFrom.name}"-аас хуулсан)` : ''), id);
+  await audit(req.user.id, 'Ферм үүсгэв', 'farms', id, name + (copyFrom ? ` (тохиргоог "${copyFrom.name}"-аас хуулсан)` : useTemplate ? ' (загвар тохиргоотой)' : ''), id);
   res.json({ id });
 });
 
@@ -464,6 +467,15 @@ app.put('/api/settings', async (req, res) => {
   await db.tx(async c => { for (const [k, v] of updates) await setSetting(req.farm.id, k, v, c); });
   await farmAudit(req, 'Тохиргоо засав', 'settings', null, changed.join(', '));
   res.json(await getSettings(req.farm.id));
+});
+
+// Загвар тохиргоо (Excel) — байгаа тохиргоог дарж бичихгүй, дутууг нь нэмнэ
+app.post('/api/settings/template', async (req, res) => {
+  requirePerm(req, null, 3);
+  const added = await db.tx(c => applyTemplate(c, req.farm.id));
+  const total = Object.values(added).reduce((s, n) => s + n, 0);
+  await farmAudit(req, 'Загвар тохиргоо оруулав', 'settings', null, JSON.stringify(added));
+  res.json({ ok: true, added, total });
 });
 
 // ---------- Сонголтын жагсаалтууд ----------

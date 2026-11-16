@@ -360,6 +360,10 @@ input[list]::-webkit-calendar-picker-indicator { display: none !important; }
 select::-ms-expand { display: none; }
 
 .sched-info { margin-bottom: 14px; }
+.settings-head { display: flex; align-items: center; gap: 12px; }
+.settings-head .page-tabs { flex: 1; min-width: 0; }
+.settings-head > .btn { flex: none; }
+@media (max-width: 860px) { .settings-head { flex-direction: column; align-items: stretch; } }
 .to-sell-cell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 
 /* ---------- Цэсийн бүлэг (дэд цэс) ---------- */
