@@ -544,7 +544,45 @@ app.get('/api/dashboard', async (req, res) => {
     WHERE w.farm_id = ? ORDER BY w.date DESC, w.id DESC LIMIT 8`, [fid]);
   const upcomingTasks = await db.q(`SELECT * FROM tasks WHERE farm_id = ? AND status = 'Төлөвлөсөн' AND date <= CURDATE() + INTERVAL 7 DAY
     ORDER BY date, id LIMIT 15`, [fid]);
-  res.json({ expenseTotal, byType, salesTotal: sales.t, salesKg: sales.kg, profit, partners, stats, bySpecies, ready, recentWeighings, upcomingTasks });
+
+  // --- Сүргийн үзүүлэлт (идэвхтэй мал) ---
+  const today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+  const todayIso = today.toISOString().slice(0, 10);
+  const daysSince = iso => Math.round((Date.parse(todayIso) - Date.parse(iso)) / 864e5);
+  const active = animals.filter(a => a.state === 'Идэвхтэй' || a.state === 'Товлосон');
+  const adgs = active.map(a => a.adg).filter(v => v != null && v > 0);
+  const herd = {
+    liveWeight: active.reduce((s, a) => s + (a.last_weight ?? a.initial_weight ?? 0), 0),
+    avgAdg: adgs.length ? adgs.reduce((s, v) => s + v, 0) / adgs.length : null,
+    // Малын хөрөнгө: худалдаж авсан үнэ, бэлгийн зах зээлийн үнэ
+    assetValue: active.reduce((s, a) => s + (a.purchase_price ?? 0) + (a.market_value ?? 0), 0),
+    bySource: active.reduce((m, a) => { m[a.source || 'Худалдаж авсан'] = (m[a.source || 'Худалдаж авсан'] || 0) + 1; return m; }, {})
+  };
+
+  // --- Анхаарах зүйлс ---
+  const pick = a => ({ id: a.id, tag_id: a.tag_id, species: a.species, age_name: a.current_age_name });
+  const needWeigh = active.filter(a => !a.last_weigh_date || daysSince(a.last_weigh_date) > 30)
+    .map(a => ({ ...pick(a), last: a.last_weigh_date, days: a.last_weigh_date ? daysSince(a.last_weigh_date) : null }));
+  const behind = active.filter(a => a.goal_adg != null && a.adg != null && a.target_status !== 'Борлуулах' && a.adg < a.goal_adg)
+    .map(a => ({ ...pick(a), adg: a.adg, goal_adg: a.goal_adg }));
+  const slaughterSoon = animals.filter(a => a.slaughter_date && a.slaughter_date >= todayIso && daysSince(a.slaughter_date) >= -14)
+    .map(a => ({ ...pick(a), date: a.slaughter_date })).sort((x, y) => x.date.localeCompare(y.date));
+  const noCarcass = animals.filter(a => a.slaughter_date && a.slaughter_date < todayIso && a.carcass_weight == null).map(pick);
+  const { n: tasksOverdue } = await db.one("SELECT COUNT(*) n FROM tasks WHERE farm_id = ? AND status = 'Төлөвлөсөн' AND date < CURDATE()", [fid]);
+
+  // --- Сар бүрийн орлого, зарлага (сүүлийн 12 сар) ---
+  const months = [];
+  for (let i = 11; i >= 0; i--) { const d = new Date(today.getFullYear(), today.getMonth() - i, 1); months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
+  const expM = await db.q(`SELECT DATE_FORMAT(date, '%Y-%m') m, SUM(COALESCE(qty,0) * COALESCE(unit_price,0)) v FROM expenses
+    WHERE farm_id = ? AND date >= ? GROUP BY m`, [fid, months[0] + '-01']);
+  const revM = await db.q(`SELECT DATE_FORMAT(COALESCE(sold_date, shipped_date), '%Y-%m') m, SUM(COALESCE(sold_weight,0) * COALESCE(price,0)) v FROM sales
+    WHERE farm_id = ? AND COALESCE(sold_date, shipped_date) >= ? GROUP BY m`, [fid, months[0] + '-01']);
+  const monthly = months.map(m => ({ month: m, expense: expM.find(r => r.m === m)?.v || 0, revenue: revM.find(r => r.m === m)?.v || 0 }));
+
+  res.json({
+    expenseTotal, byType, salesTotal: sales.t, salesKg: sales.kg, profit, partners, stats, bySpecies, ready, recentWeighings, upcomingTasks,
+    herd, monthly, attention: { needWeigh, behind, slaughterSoon, noCarcass, tasksOverdue }
+  });
 });
 
 // ---------- Ерөнхий CRUD (сонгосон ферм дотор) ----------

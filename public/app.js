@@ -847,54 +847,163 @@ const activeTags = () => state.lk.animals.filter(a => !a.slaughtered).map(a => a
 // ---------- Хуудаснууд ----------
 const PAGES = {};
 
+// ---------- Хянах самбарын график, жагсаалт ----------
+// Мөнгөн дүнг товчлох: 1,250,000 → 1.3 сая
+const abbrMoney = v => {
+  const a = Math.abs(v);
+  if (a >= 1e9) return nf2.format(v / 1e9) + ' тэрбум';
+  if (a >= 1e6) return nf2.format(Math.round(v / 1e5) / 10) + ' сая';
+  if (a >= 1e3) return nf0.format(Math.round(v / 1e3)) + ' мян';
+  return nf0.format(v);
+};
+const niceMax = v => { if (v <= 0) return 1; const p = 10 ** Math.floor(Math.log10(v)); const n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; };
+const MONTHS_MN = ['1-р', '2-р', '3-р', '4-р', '5-р', '6-р', '7-р', '8-р', '9-р', '10-р', '11-р', '12-р'];
+const SVGNS = 'http://www.w3.org/2000/svg';
+const svg = (tag, attrs = {}) => { const el = document.createElementNS(SVGNS, tag); for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v); return el; };
+// Дээд талдаа 4px бөөрөнхий, суурьтаа шулуун багана
+const barPath = (x, y, w, hgt) => { const r = Math.min(4, w / 2, hgt); return `M${x},${y + hgt}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + hgt}Z`; };
+
+// Сарын орлого ба зарлага — бүлэглэсэн багана, нэг тэнхлэг, hover тайлбар
+function monthlyChart(data) {
+  const W = 760, H = 250, L = 58, R = 8, T = 14, B = 30;
+  const max = niceMax(Math.max(1, ...data.flatMap(d => [d.revenue, d.expense])));
+  const pw = W - L - R, ph = H - T - B, gw = pw / data.length;
+  const bw = Math.max(4, Math.min(16, (gw - 10) / 2));
+  const y = v => T + ph - (v / max) * ph;
+  const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'mchart', role: 'img', 'aria-label': 'Сарын орлого ба зарлага' });
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i, yy = y(v);
+    root.append(svg('line', { x1: L, x2: W - R, y1: yy, y2: yy, class: i === 0 ? 'axis' : 'grid' }));
+    const t = svg('text', { x: L - 8, y: yy + 4, class: 'tick', 'text-anchor': 'end' }); t.textContent = abbrMoney(v); root.append(t);
+  }
+  const wrap = h('div', { class: 'mchart-wrap' });
+  const tip = h('div', { class: 'mchart-tip', hidden: true });
+  data.forEach((d, i) => {
+    const cx = L + gw * i + gw / 2;
+    const [yy, mm] = d.month.split('-');
+    const lbl = svg('text', { x: cx, y: H - 10, class: 'tick', 'text-anchor': 'middle' });
+    lbl.textContent = mm === '01' || i === 0 ? `${yy}.${mm}` : MONTHS_MN[Number(mm) - 1]; root.append(lbl);
+    const g = svg('g', { class: 'mgroup' });
+    if (d.revenue > 0) g.append(svg('path', { d: barPath(cx - bw - 1, y(d.revenue), bw, T + ph - y(d.revenue)), class: 's1' }));
+    if (d.expense > 0) g.append(svg('path', { d: barPath(cx + 1, y(d.expense), bw, T + ph - y(d.expense)), class: 's2' }));
+    // Баганаас өргөн hover талбар
+    const hit = svg('rect', { x: L + gw * i, y: T, width: gw, height: ph, class: 'hit' });
+    const show = () => {
+      g.classList.add('on');
+      tip.replaceChildren(h('strong', {}, `${yy} оны ${MONTHS_MN[Number(mm) - 1]} сар`),
+        h('div', {}, h('i', { class: 'sw s1' }), 'Орлого', h('b', {}, FMT.money(d.revenue))),
+        h('div', {}, h('i', { class: 'sw s2' }), 'Зарлага', h('b', {}, FMT.money(d.expense))),
+        h('div', { class: 'tip-total' }, 'Ашиг', h('b', {}, FMT.money(d.revenue - d.expense))));
+      tip.hidden = false;
+      const left = ((L + gw * i + gw / 2) / W) * 100;
+      tip.style.left = `clamp(0px, calc(${left}% - 90px), calc(100% - 180px))`;
+    };
+    const hide = () => { g.classList.remove('on'); tip.hidden = true; };
+    hit.addEventListener('mouseenter', show); hit.addEventListener('mouseleave', hide);
+    hit.addEventListener('click', show);
+    root.append(g, hit);
+  });
+  wrap.append(root, tip);
+  return h('div', {},
+    h('div', { class: 'legend' }, h('span', {}, h('i', { class: 'sw s1' }), 'Орлого'), h('span', {}, h('i', { class: 'sw s2' }), 'Зарлага')),
+    wrap,
+    h('details', { class: 'mchart-table' }, h('summary', {}, 'Хүснэгтээр харах'),
+      h('table', { class: 'data compact' },
+        h('thead', {}, h('tr', {}, ['Сар', 'Орлого', 'Зарлага', 'Ашиг'].map((t, i) => h('th', { class: i ? 'num' : null }, t)))),
+        h('tbody', {}, data.map(d => h('tr', {}, h('td', {}, d.month), h('td', { class: 'num' }, FMT.money(d.revenue)),
+          h('td', { class: 'num' }, FMT.money(d.expense)), h('td', { class: 'num' }, FMT.money(d.revenue - d.expense))))))));
+}
+
+// Эрэмбэлсэн хэвтээ багана (нэр · багана · дүн) — нэг өнгө
+function meterList(rows, fmt, cls) {
+  const max = Math.max(1, ...rows.map(r => r.value));
+  return h('div', { class: 'meter-list' }, rows.map(r => h('div', { class: 'meter-row', title: `${r.label}: ${fmt(r.value)}` },
+    h('span', { class: 'meter-name' }, r.label),
+    h('span', { class: 'meter-track' }, h('span', { class: 'meter-bar ' + (cls || ''), style: `width:${Math.max(2, (r.value / max) * 100)}%` })),
+    h('span', { class: 'meter-val' }, fmt(r.value), r.share != null ? h('small', {}, ` ${nf0.format(r.share)}%`) : null))));
+}
+
 PAGES.dashboard = async main => {
   const d = await api('GET', '/api/dashboard');
   const kpi = (label, value, cls, sub) => h('div', { class: 'kpi ' + (cls || '') }, h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
   const pendingNote = can('admin') && state.lk.pendingUsers
     ? h('a', { class: 'notice', href: '#/users' }, `Баталгаажуулалт хүлээж буй ${state.lk.pendingUsers} хэрэглэгч байна →`) : null;
-  const pctSum = d.partners.reduce((s, p) => s + p.percent, 0);
   const tday = today();
+  const A = d.attention;
+  const empty = !d.stats.total && !d.expenseTotal && !d.salesTotal;
+
+  // Хоосон ферм: шууд эхлэх товчнууд
+  if (empty) {
+    return fill(main, pendingNote, h('section', { class: 'card start-card' },
+      h('h2', {}, state.lk.farm.name),
+      h('p', { class: 'muted' }, 'Энэ фермд бүртгэл алга байна.'),
+      h('div', { class: 'start-actions' },
+        canMod('animals', 2) ? h('a', { class: 'btn primary', href: '#/animals' }, '+ Мал бүртгэх') : null,
+        canMod('expenses', 2) ? h('a', { class: 'btn ghost', href: '#/expenses' }, '+ Зардал бүртгэх') : null,
+        farmFull() ? h('a', { class: 'btn ghost', href: '#/settings' }, 'Тохиргоо') : null)));
+  }
+
+  // Анхаарах зүйлс — зөвхөн тоо нь 0-ээс их
+  const item = (cls, icon, label, n, href, tags) => n ? h('a', { class: 'att-item ' + cls, href },
+    h('span', { class: 'att-icon', 'aria-hidden': 'true' }, icon),
+    h('span', { class: 'att-text' }, h('strong', {}, label), tags?.length ? h('small', {}, tags.slice(0, 6).join(', ') + (tags.length > 6 ? ` +${tags.length - 6}` : '')) : null),
+    h('span', { class: 'att-count' }, n)) : null;
+  const attItems = [
+    canMod('tasks') ? item('critical', '!', 'Хоцорсон ажил', A.tasksOverdue, '#/tasks') : null,
+    canMod('slaughter') ? item('warning', '⚑', 'Гулуузны жин бүртгээгүй', A.noCarcass.length, '#/slaughter', A.noCarcass.map(a => a.tag_id)) : null,
+    canMod('weighings') ? item('warning', '⚖', '30+ хоног жинлээгүй мал', A.needWeigh.length, '#/weighings', A.needWeigh.map(a => a.tag_id)) : null,
+    canMod('growth') ? item('serious', '↘', 'Зорилтоос хоцорч буй өсөлт', A.behind.length, '#/growth', A.behind.map(a => a.tag_id)) : null,
+    canMod('slaughter') ? item('info', '▤', '14 хоногт бойлох мал', A.slaughterSoon.length, '#/slaughter', A.slaughterSoon.map(a => `${a.tag_id} (${a.date.slice(5)})`)) : null,
+    canMod('sell') ? item('good', '✓', 'Борлуулахад бэлэн мал', d.stats.ready, '#/sell', d.ready.map(a => a.tag_id)) : null
+  ].filter(Boolean);
+
+  const hasMoney = d.monthly.some(m => m.revenue || m.expense);
+  const margin = d.salesTotal > 0 ? (d.profit / d.salesTotal) * 100 : null;
+  const speciesRows = Object.entries(d.bySpecies).map(([k, v]) => ({ label: k, value: v })).sort((a, b) => b.value - a.value);
+  const typeRows = d.byType.filter(t => t.total > 0).map(t => ({ label: t.type, value: t.total, share: d.expenseTotal ? (t.total / d.expenseTotal) * 100 : null }));
+
   const tasksCard = canMod('tasks') && d.upcomingTasks.length ? h('section', { class: 'card' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Ойрын ажил'), h('a', { class: 'btn ghost small', href: '#/tasks' }, 'Бүгдийг харах')),
     h('table', { class: 'data compact' },
       h('thead', {}, h('tr', {}, ['Огноо', 'Ажил', 'Мал', 'Хариуцагч'].map(x => h('th', {}, x)))),
       h('tbody', {}, d.upcomingTasks.map(r => h('tr', { class: r.date < tday ? 'overdue-row' : r.date === tday ? 'today-row' : null },
-        h('td', {}, `${r.date} (${weekday(r.date)})`), h('td', {}, r.type), h('td', {}, r.tag_id ?? ''), h('td', {}, r.assignee ?? '')))))) : null;
-  fill(main, 
+        h('td', {}, `${r.date} (${weekday(r.date)})`), h('td', {}, r.type), h('td', { class: 'note-cell' }, r.tag_id ?? ''), h('td', {}, r.assignee ?? '')))))) : null;
+
+  fill(main,
     pendingNote,
-    tasksCard,
+    // Санхүү
     h('div', { class: 'kpis' },
+      kpi('Борлуулалтын орлого', FMT.money(d.salesTotal), 'pos', d.salesKg ? `${FMT.kg(d.salesKg)} борлуулсан` : null),
       kpi('Нийт зарлага', FMT.money(d.expenseTotal), 'neg'),
-      kpi('Борлуулалтын орлого', FMT.money(d.salesTotal), 'pos'),
-      kpi('Ашиг', FMT.money(d.profit), d.profit >= 0 ? 'pos' : 'neg')),
+      kpi('Ашиг', FMT.money(d.profit), d.profit >= 0 ? 'pos' : 'neg', margin != null ? `Ашгийн хувь ${nf0.format(margin)}%` : null),
+      kpi('Малын хөрөнгө', FMT.money(d.herd.assetValue))),
+    // Сүрэг
     h('div', { class: 'kpis' },
-      kpi('Идэвхтэй мал', String(d.stats.active), '', Object.entries(d.bySpecies).map(([k, v]) => `${k} ${v}`).join(' · ')),
-      kpi('Зорилтот жинд хүрсэн', String(d.stats.ready), d.stats.ready ? 'pos' : ''),
-      kpi('Бойлсон', String(d.stats.slaughtered)),
-      kpi('Зарагдсан', String(d.stats.sold))),
+      kpi('Идэвхтэй мал', nf0.format(d.stats.active), '', speciesRows.map(r => `${r.label} ${r.value}`).join(' · ') || null),
+      kpi('Нийт амьд жин', FMT.kg(d.herd.liveWeight)),
+      kpi('Дундаж өдрийн өсөлт', d.herd.avgAdg != null ? FMT.kg(d.herd.avgAdg) : '—'),
+      kpi('Бойлсон · Зарагдсан', `${d.stats.slaughtered} · ${d.stats.sold}`)),
+    h('div', { class: 'grid2 dash-main' },
+      attItems.length ? h('section', { class: 'card' }, h('h2', {}, 'Анхаарах'), h('div', { class: 'att-list' }, attItems)) : null,
+      hasMoney ? h('section', { class: 'card' }, h('h2', {}, 'Сарын орлого ба зарлага'), monthlyChart(d.monthly)) : null),
     h('div', { class: 'grid2' },
-      h('section', { class: 'card' }, h('h2', {}, 'Ашиг хуваарилалт'),
+      typeRows.length ? h('section', { class: 'card' }, h('h2', {}, 'Зардал төрлөөр'), meterList(typeRows, FMT.money, 's2')) : null,
+      speciesRows.length ? h('section', { class: 'card' }, h('h2', {}, 'Идэвхтэй мал төрлөөр'), meterList(speciesRows, v => `${v} толгой`, 'brand'),
+        Object.keys(d.herd.bySource).length > 1 ? h('div', { class: 'chips' }, Object.entries(d.herd.bySource).map(([k, v]) => h('span', { class: 'lp-chip' }, `${k} ${v}`))) : null) : null),
+    tasksCard,
+    h('div', { class: 'grid2' },
+      d.ready.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Борлуулахад бэлэн мал'), canMod('sell') ? h('a', { class: 'btn ghost small', href: '#/sell' }, 'Жагсаалт') : null),
         h('table', { class: 'data compact' },
-          h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Дүн'))),
-          h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount)))))),
-),
-      h('section', { class: 'card' }, h('h2', {}, 'Зардал төрлөөр'),
-        d.byType.length ? h('table', { class: 'data compact' },
-          h('thead', {}, h('tr', {}, h('th', {}, 'Төрөл'), h('th', { class: 'num' }, 'Тоо'), h('th', { class: 'num' }, 'Дүн'), h('th', { class: 'num' }, 'Хувь'))),
-          h('tbody', {}, d.byType.map(t => h('tr', {}, h('td', {}, t.type), h('td', { class: 'num' }, t.n), h('td', { class: 'num' }, FMT.money(t.total)),
-            h('td', { class: 'num' }, d.expenseTotal ? FMT.pct(t.total / d.expenseTotal * 100) : ''))))) : null)),
-    h('div', { class: 'grid2' },
-      h('section', { class: 'card' }, h('h2', {}, 'Борлуулахад бэлэн мал'),
-        d.ready.length ? h('table', { class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'ID'), h('th', {}, 'Төрөл'), h('th', { class: 'num' }, 'Сүүлийн жин'), h('th', { class: 'num' }, 'Зорилт'))),
-          h('tbody', {}, d.ready.map(a => h('tr', {}, h('td', {}, a.tag_id), h('td', {}, `${a.species} ${a.age_name}`), h('td', { class: 'num' }, FMT.kg(a.last_weight)), h('td', { class: 'num' }, FMT.kg(a.target_weight))))))
-          : null),
-      h('section', { class: 'card' }, h('h2', {}, 'Сүүлийн жинлэлтүүд'),
-        d.recentWeighings.length ? h('table', { class: 'data compact' },
+          h('tbody', {}, d.ready.map(a => h('tr', {}, h('td', {}, a.tag_id), h('td', {}, `${a.species} ${a.age_name ?? ''}`), h('td', { class: 'num' }, FMT.kg(a.last_weight)), h('td', { class: 'num' }, FMT.kg(a.target_weight))))))) : null,
+      d.recentWeighings.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Сүүлийн жинлэлтүүд'), canMod('weighings') ? h('a', { class: 'btn ghost small', href: '#/weighings' }, 'Бүгд') : null),
+        h('table', { class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', { class: 'num' }, 'Жин'))),
-          h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))
-          : null))
-  );
+          h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null),
+    d.partners.length ? h('section', { class: 'card' }, h('h2', {}, 'Ашиг хуваарилалт'),
+      h('table', { class: 'data compact' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Дүн'))),
+        h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount))))))) : null);
 };
 
 PAGES.animals = main => crudSection(main, {
