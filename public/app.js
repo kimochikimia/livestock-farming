@@ -1320,8 +1320,11 @@ PAGES.tasks = async main => {
   const canDel = canMod('tasks', 3);
   const t = today();
   const in7 = addDays(t, 7);
-  const st = PAGES.tasks._st || (PAGES.tasks._st = { q: '', type: '' });
+  const savedView = (() => { try { return localStorage.getItem('tsf.taskView'); } catch { return null; } })();
+  const st = PAGES.tasks._st || (PAGES.tasks._st = { q: '', type: '', view: savedView === 'calendar' ? 'calendar' : 'list', month: t.slice(0, 7), day: t });
   const reload = () => render();
+  // Тухайн өдрийг урьдчилан бөглөсөн шинэ ажлын маягт
+  const cfgForDay = day => ({ ...TASK_CFG, fields: TASK_FIELDS.map(f => (f.k === 'date' ? { ...f, def: () => day } : f)) });
 
   async function markDone(r) {
     try { await api('PUT', `/api/r/tasks/${r.id}`, taskBody(r, { status: 'Хийгдсэн', done_date: today() })); toast(`${r.type}: хийгдсэн`); reload(); }
@@ -1361,10 +1364,62 @@ PAGES.tasks = async main => {
   }
 
   const body = h('div', { class: 'task-groups' });
+
+  // ----- Календарь (сараар) -----
+  const MON_FIRST = ['Да', 'Мя', 'Лх', 'Пү', 'Ба', 'Бя', 'Ня'];
+  const chipClass = r => (r.status === 'Хийгдсэн' ? 'done' : r.status === 'Цуцалсан' ? 'cancelled' : r.date < t ? 'overdue' : 'planned');
+  function drawCalendar(list) {
+    const [Y, M] = st.month.split('-').map(Number);
+    const first = `${st.month}-01`;
+    const startDow = (new Date(first + 'T00:00:00Z').getUTCDay() + 6) % 7; // Даваа = 0
+    const daysInMonth = new Date(Date.UTC(Y, M, 0)).getUTCDate();
+    const cellCount = Math.ceil((startDow + daysInMonth) / 7) * 7;
+    const start = addDays(first, -startDow);
+    const byDate = new Map();
+    for (const r of list) { if (!byDate.has(r.date)) byDate.set(r.date, []); byDate.get(r.date).push(r); }
+    const shift = n => { const d = new Date(Date.UTC(Y, M - 1 + n, 1)); st.month = d.toISOString().slice(0, 7); draw(); };
+
+    const grid = h('div', { class: 'cal-grid' }, MON_FIRST.map(w => h('div', { class: 'cal-wd' }, w)));
+    for (let i = 0; i < cellCount; i++) {
+      const day = addDays(start, i);
+      const items = byDate.get(day) || [];
+      const cls = ['cal-day', day.slice(0, 7) !== st.month && 'other', day === t && 'today', day === st.day && 'selected',
+        items.some(r => chipClass(r) === 'overdue') && 'has-overdue'].filter(Boolean).join(' ');
+      grid.append(h('div', { class: cls, role: 'button', tabindex: '0', 'aria-label': `${day}: ${items.length} ажил`,
+        onclick: () => { st.day = day; draw(); },
+        onkeydown: e => { if (e.key === 'Enter') { st.day = day; draw(); } } },
+        h('span', { class: 'cal-num' }, Number(day.slice(8))),
+        h('div', { class: 'cal-chips' },
+          items.slice(0, 3).map(r => h('span', { class: 'cal-chip ' + chipClass(r), title: `${r.type}${r.tag_id ? ' · ' + r.tag_id : ''}${r.assignee ? ' · ' + r.assignee : ''}`,
+            onclick: canWrite ? e => { e.stopPropagation(); openForm(TASK_CFG, r, reload, canDel); } : null }, r.type)),
+          items.length > 3 ? h('span', { class: 'cal-more' }, `+${items.length - 3}`) : null),
+        items.length ? h('span', { class: 'cal-dot' }, items.length) : null));
+    }
+    const dayList = (byDate.get(st.day) || []).sort((a, b) => a.id - b.id);
+    fill(body,
+      h('section', { class: 'card cal-card' },
+        h('div', { class: 'cal-head' },
+          h('button', { type: 'button', class: 'btn ghost small', 'aria-label': 'Өмнөх сар', onclick: () => shift(-1) }, '‹'),
+          h('h2', {}, `${Y} оны ${MONTHS_MN[M - 1]} сар`),
+          h('button', { type: 'button', class: 'btn ghost small', 'aria-label': 'Дараах сар', onclick: () => shift(1) }, '›'),
+          h('span', { class: 'spacer' }),
+          h('button', { type: 'button', class: 'btn ghost small', onclick: () => { st.month = t.slice(0, 7); st.day = t; draw(); } }, 'Өнөөдөр')),
+        grid,
+        h('div', { class: 'legend cal-legend' },
+          [['planned', 'Төлөвлөсөн'], ['overdue', 'Хоцорсон'], ['done', 'Хийгдсэн'], ['cancelled', 'Цуцалсан']]
+            .map(([c, l]) => h('span', {}, h('i', { class: 'sw cal-sw ' + c }), l)))),
+      h('section', { class: 'card task-group' },
+        h('div', { class: 'toolbar' },
+          h('h2', {}, `${st.day} (${weekday(st.day)})`, h('span', { class: 'count-pill' }, dayList.length)),
+          canWrite ? h('div', { class: 'toolbar-right' }, h('button', { type: 'button', class: 'btn primary small', onclick: () => openForm(cfgForDay(st.day), null, reload, canDel) }, '+ Энэ өдөр ажил нэмэх')) : null),
+        dayList.length ? table(dayList) : h('p', { class: 'muted center' }, 'Энэ өдөр ажил алга')));
+  }
+
   function draw() {
     const match = r => (!st.type || r.type === st.type) &&
       (!st.q || [r.type, r.tag_id, r.assignee, r.note].some(v => String(v ?? '').toLowerCase().includes(st.q)));
     const list = rows.filter(match);
+    if (st.view === 'calendar') return drawCalendar(list);
     const planned = list.filter(r => r.status === 'Төлөвлөсөн');
     const groups = [
       { title: 'Хоцорсон', cls: 'overdue', items: planned.filter(r => r.date < t) },
@@ -1382,9 +1437,18 @@ PAGES.tasks = async main => {
   }
 
   const types = [...new Set(rows.map(r => r.type))].sort();
+  // Жагсаалт / Календарь сэлгэгч (сонголт энэ хөтөч дээр санагдана)
+  const viewBtn = (v, label) => h('button', { type: 'button', class: 'seg' + (st.view === v ? ' active' : ''), 'aria-pressed': String(st.view === v),
+    onclick: e => {
+      st.view = v;
+      try { localStorage.setItem('tsf.taskView', v); } catch { /* */ }
+      e.currentTarget.parentNode.querySelectorAll('.seg').forEach(b => { const on = b === e.currentTarget; b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); });
+      draw();
+    } }, label);
   main.replaceChildren(
     h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Хуваарьт ажил'),
       h('div', { class: 'toolbar-right' },
+        h('div', { class: 'seg-group', role: 'group', 'aria-label': 'Харагдац' }, viewBtn('list', 'Жагсаалт'), viewBtn('calendar', 'Календарь')),
         h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', value: st.q, oninput: e => { st.q = e.target.value.trim().toLowerCase(); draw(); } }),
         h('select', { class: 'filter', onchange: e => { st.type = e.target.value; draw(); } },
           h('option', { value: '' }, 'Ажил: бүгд'), types.map(x => h('option', { value: x, selected: st.type === x }, x))),
