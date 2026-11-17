@@ -467,9 +467,10 @@ async function crudSection(container, cfg) {
     try { await api('DELETE', `/api/r/${cfg.res}/${r.id}`); toast('Устгалаа'); refresh(); }
     catch (e) { toast(e.message, 'err'); }
   }
-  const actionCell = r => h('td', { class: 'row-actions' },
+  // Өөр бүртгэлээс автоматаар орсон мөр (r.auto) энд засагдахгүй — эх бүртгэл рүү очих товч (cfg.autoAction)
+  const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r)) : h('td', { class: 'row-actions' },
     h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg, r, refresh, canDel); } }, 'Засах'),
-    canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeRow(r); } }, 'Устгах') : null);
+    canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeRow(r); } }, 'Устгах') : null));
 
   const tbody = h('tbody'); const tfoot = h('tfoot'); const count = h('span', { class: 'muted small' });
   let thead = null;
@@ -494,8 +495,8 @@ async function crudSection(container, cfg) {
   function draw() {
     const list = filtered();
     tbody.replaceChildren(...list.map(r => h('tr', {
-      class: canWrite ? 'clickable' : null,
-      onclick: canWrite ? () => openForm(cfg, r, refresh, canDel) : null
+      class: canWrite && !r.auto ? 'clickable' : r.auto ? 'auto-row' : null,
+      onclick: canWrite && !r.auto ? () => openForm(cfg, r, refresh, canDel) : null
     }, cfg.columns.map(c => h('td', { class: (c.cls || '') + (NUMERIC.has(c.f) ? ' num' : ''), 'data-label': c.label },
       c.render ? c.render(r) : FMT[c.f || 'text'](r[c.k]))), showActions ? actionCell(r) : null)));
     if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: cfg.columns.length + (showActions ? 1 : 0), class: 'empty' }, cfg.empty || 'Бичлэг алга')));
@@ -893,7 +894,7 @@ function photoPanel(res, recordId) {
 const photoColumn = res => ({
   k: 'photo_count', label: 'Зураг', csv: r => r.photo_count,
   render: r => r.photo_first
-    ? h('button', { type: 'button', class: 'cell-thumb', onclick: e => { e.stopPropagation(); openRecordPhotos(res, r.id); } },
+    ? h('button', { type: 'button', class: 'cell-thumb', onclick: e => { e.stopPropagation(); openRecordPhotos(r.photo_res || res, r.photo_id ?? r.id); } },
         h('img', { src: `/api/photo/${r.photo_first}`, loading: 'lazy', alt: '' }),
         r.photo_count > 1 ? h('span', {}, r.photo_count) : null)
     : ''
@@ -1253,6 +1254,8 @@ function fillFeedPrice(values, ctrls) {
 }
 PAGES.expenses = main => crudSection(main, {
   res: 'expenses', module: 'expenses', photos: true, title: 'Зардлын бүртгэл', itemName: 'зардал', addLabel: '+ Зардал нэмэх',
+  // "Мал авсан" мөр малын бүртгэлээс автоматаар орно — үнийг малын бүртгэл дээр засна
+  autoAction: r => (canMod('animals', 1) ? h('a', { class: 'btn ghost small', href: '#/animals' }, 'Малын бүртгэл') : null),
   columns: [
     { k: 'date', label: 'Огноо' }, { k: 'type', label: 'Төрөл' }, { k: 'feed_name', label: 'Дэд төрөл' }, { k: 'description', label: 'Тайлбар' },
     { k: 'qty', label: 'Тоо', f: 'num', render: r => qtyUnit(r.qty, r.unit), csv: r => qtyUnit(r.qty, r.unit) },

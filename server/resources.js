@@ -175,6 +175,22 @@ function assertFeedBalance(name, buckets, msg) {
   }
 }
 
+// ---------- Худалдаж авсан мал = "Мал авсан" зардал (малын бүртгэлээс автоматаар, давхар бичлэггүй) ----------
+const ANIMAL_EXPENSE_TYPE = 'Мал авсан';
+async function animalPurchaseExpenses(db, farmId) {
+  const rows = await db.q(`SELECT id, tag_id, species, age_name, purchase_date, purchase_price, transport_cost, other_cost
+    FROM animals WHERE farm_id = ? AND source = 'Худалдаж авсан'
+      AND (purchase_price IS NOT NULL OR transport_cost IS NOT NULL OR other_cost IS NOT NULL)`, [farmId]);
+  return rows.map(a => {
+    const total = n0(a.purchase_price) + n0(a.transport_cost) + n0(a.other_cost);
+    return {
+      id: 'animal-' + a.id, auto: 'animal', animal_id: a.id, date: a.purchase_date, type: ANIMAL_EXPENSE_TYPE, feed_name: null,
+      description: [a.tag_id, a.species, a.age_name].filter(Boolean).join(' · '),
+      qty: 1, unit: 'толгой', unit_price: total, total, supplier: null
+    };
+  });
+}
+
 const resources = {
   animals: {
     table: 'animals', title: 'Мал', track: true, photos: true, describe: v => v.tag_id,
@@ -308,7 +324,11 @@ const resources = {
       const { buckets } = await feedBuckets(db, farmId, old.feed_name, { expenseId: old.id });
       assertFeedBalance(old.feed_name, buckets, 'энэ орлогыг устгавал зарцуулалт орлогоос их болно');
     },
-    list: async (db, farmId) => (await db.q('SELECT *, COALESCE(qty, 0) * COALESCE(unit_price, 0) AS total FROM expenses WHERE farm_id = ? ORDER BY date DESC, id DESC', [farmId]))
+    // Гараар бүртгэсэн зардал + малын бүртгэлээс автоматаар орох "Мал авсан" зардал (зөвхөн харах)
+    async list(db, farmId) {
+      const own = await db.q('SELECT *, COALESCE(qty, 0) * COALESCE(unit_price, 0) AS total FROM expenses WHERE farm_id = ? ORDER BY date DESC, id DESC', [farmId]);
+      return [...own, ...await animalPurchaseExpenses(db, farmId)].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    }
   },
 
   // Тэжээлийн зарцуулалт — зардлаар орж ирсэн тэжээлээс хасагдана
@@ -616,4 +636,4 @@ function mapDbError(err) {
   return null;
 }
 
-module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE };
+module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE, animalPurchaseExpenses };

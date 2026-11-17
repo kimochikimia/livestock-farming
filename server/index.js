@@ -8,7 +8,7 @@ const cookieParser = require('cookie-parser');
 const { rateLimit } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const { db, init, audit, getSettings, setSetting, SETTING_KEYS, ensureAdmin, UPLOAD_DIR, copyFarmSettings } = require('./db');
-const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE } = require('./resources');
+const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE, animalPurchaseExpenses } = require('./resources');
 const { applyTemplate } = require('./template');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -522,9 +522,17 @@ app.get('/api/lookups', async (req, res) => {
 app.get('/api/dashboard', async (req, res) => {
   requirePerm(req, 'dashboard', 1);
   const fid = req.farm.id;
-  const { t: expenseTotal } = await db.one('SELECT COALESCE(SUM(COALESCE(qty,0) * COALESCE(unit_price,0)), 0) t FROM expenses WHERE farm_id = ?', [fid]);
+  // Зардал = гараар бүртгэсэн + худалдаж авсан малын үнэ ("Мал авсан")
+  const animalExp = await animalPurchaseExpenses(db, fid);
+  const { t: ownExpense } = await db.one('SELECT COALESCE(SUM(COALESCE(qty,0) * COALESCE(unit_price,0)), 0) t FROM expenses WHERE farm_id = ?', [fid]);
+  const expenseTotal = ownExpense + animalExp.reduce((s, r) => s + r.total, 0);
   const byType = await db.q(`SELECT type, COUNT(*) n, SUM(COALESCE(qty,0) * COALESCE(unit_price,0)) total
-    FROM expenses WHERE farm_id = ? GROUP BY type ORDER BY total DESC`, [fid]);
+    FROM expenses WHERE farm_id = ? GROUP BY type`, [fid]);
+  for (const r of animalExp) {
+    const t = byType.find(x => x.type === r.type) || (byType.push({ type: r.type, n: 0, total: 0 }), byType[byType.length - 1]);
+    t.n += 1; t.total += r.total;
+  }
+  byType.sort((a, b) => b.total - a.total);
   const sales = await db.one('SELECT COALESCE(SUM(COALESCE(sold_weight,0) * COALESCE(price,0)), 0) t, COALESCE(SUM(sold_weight), 0) kg FROM sales WHERE farm_id = ?', [fid]);
   const profit = sales.t - expenseTotal;
   const partners = (await db.q('SELECT * FROM partners WHERE farm_id = ? ORDER BY id', [fid])).map(p => ({ ...p, amount: profit * p.percent / 100 }));
@@ -579,7 +587,9 @@ app.get('/api/dashboard', async (req, res) => {
     WHERE farm_id = ? AND date >= ? GROUP BY m`, [fid, months[0] + '-01']);
   const revM = await db.q(`SELECT DATE_FORMAT(COALESCE(sold_date, shipped_date), '%Y-%m') m, SUM(COALESCE(sold_weight,0) * COALESCE(price,0)) v FROM sales
     WHERE farm_id = ? AND COALESCE(sold_date, shipped_date) >= ? GROUP BY m`, [fid, months[0] + '-01']);
-  const monthly = months.map(m => ({ month: m, expense: expM.find(r => r.m === m)?.v || 0, revenue: revM.find(r => r.m === m)?.v || 0 }));
+  const animalM = {};
+  for (const r of animalExp) { const m = r.date.slice(0, 7); animalM[m] = (animalM[m] || 0) + r.total; }
+  const monthly = months.map(m => ({ month: m, expense: (expM.find(r => r.m === m)?.v || 0) + (animalM[m] || 0), revenue: revM.find(r => r.m === m)?.v || 0 }));
 
   res.json({
     expenseTotal, byType, salesTotal: sales.t, salesKg: sales.kg, profit, partners, stats, bySpecies, ready, recentWeighings, upcomingTasks,
@@ -612,6 +622,14 @@ app.get('/api/r/:res', async (req, res) => {
     const ph = new Map((await db.q('SELECT entity_id, COUNT(*) n, MIN(id) first FROM photos WHERE farm_id = ? AND entity = ? GROUP BY entity_id',
       [req.farm.id, r.table])).map(p => [p.entity_id, p]));
     rows = rows.map(row => ({ ...row, photo_count: ph.get(row.id)?.n || 0, photo_first: ph.get(row.id)?.first || null }));
+    // Малын бүртгэлээс орсон "Мал авсан" зардалд тухайн малын зургийг харуулна
+    if (rows.some(row => row.auto === 'animal')) {
+      const ap = new Map((await db.q("SELECT entity_id, COUNT(*) n, MIN(id) first FROM photos WHERE farm_id = ? AND entity = 'animals' GROUP BY entity_id",
+        [req.farm.id])).map(p => [p.entity_id, p]));
+      rows = rows.map(row => (row.auto === 'animal'
+        ? { ...row, photo_res: 'animals', photo_id: row.animal_id, photo_count: ap.get(row.animal_id)?.n || 0, photo_first: ap.get(row.animal_id)?.first || null }
+        : row));
+    }
   }
   res.json(rows);
 });
