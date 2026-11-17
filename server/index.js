@@ -8,7 +8,7 @@ const cookieParser = require('cookie-parser');
 const { rateLimit } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const { db, init, audit, getSettings, setSetting, SETTING_KEYS, ensureAdmin, UPLOAD_DIR, copyFarmSettings } = require('./db');
-const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE, animalPurchaseExpenses } = require('./resources');
+const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE, animalPurchaseExpenses, meatStock } = require('./resources');
 const { applyTemplate } = require('./template');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -124,7 +124,7 @@ async function loadFarm(req) {
   return farm;
 }
 // Фермийн доторх хүсэлтүүд — сонгосон фермээр шүүгдэнэ
-app.use(['/api/r', '/api/photos', '/api/animals', '/api/slaughters', '/api/lookups', '/api/dashboard', '/api/settings'], async (req, res, next) => { await loadFarm(req); next(); });
+app.use(['/api/r', '/api/photos', '/api/animals', '/api/slaughters', '/api/meat-stock', '/api/lookups', '/api/dashboard', '/api/settings'], async (req, res, next) => { await loadFarm(req); next(); });
 const farmFull = req => req.farmRole === 'owner' || req.farmRole === 'admin';
 function permLevel(req, mod) {
   if (!req.farm) return 0;
@@ -212,7 +212,7 @@ app.post('/api/auth/password', need('viewer'), async (req, res) => {
 app.get('/api/public/stats', async (req, res) => {
   const one = async sql => (await db.one(sql)).n;
   const bySpecies = await db.q(`SELECT a.species, COUNT(*) n FROM animals a
-    WHERE NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE())
+    WHERE NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')
     GROUP BY a.species ORDER BY n DESC`);
   res.set('Cache-Control', 'public, max-age=60');
   res.json({
@@ -268,7 +268,7 @@ app.get('/api/farms', need('viewer'), async (req, res) => {
   const rows = await db.q(`
     SELECT f.*, u.name AS owner_name, u.phone AS owner_phone,
       (SELECT COUNT(*) FROM animals a WHERE a.farm_id = f.id
-        AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE())) AS active_animals,
+        AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')) AS active_animals,
       (SELECT COUNT(*) FROM tasks t WHERE t.farm_id = f.id AND t.status = 'Төлөвлөсөн' AND t.date <= CURDATE()) AS tasks_due
     , (SELECT m.perms FROM farm_members m WHERE m.farm_id = f.id AND m.user_id = ?) AS member_perms
     , EXISTS (SELECT 1 FROM farm_members m WHERE m.farm_id = f.id AND m.user_id = ?) AS is_member
@@ -283,9 +283,22 @@ app.get('/api/farms', need('viewer'), async (req, res) => {
   })));
 });
 
+// Фермийн байршил: аймаг (жагсаалтаас) ба сум заавал, баг — сонголттой
+const AIMAGS = ['Архангай', 'Баян-Өлгий', 'Баянхонгор', 'Булган', 'Говь-Алтай', 'Говьсүмбэр', 'Дархан-Уул', 'Дорноговь', 'Дорнод', 'Дундговь',
+  'Завхан', 'Орхон', 'Өвөрхангай', 'Өмнөговь', 'Сүхбаатар', 'Сэлэнгэ', 'Төв', 'Увс', 'Ховд', 'Хөвсгөл', 'Хэнтий', 'Улаанбаатар'];
+function checkLocation(body) {
+  const t = (v, max) => String(v ?? '').trim().slice(0, max) || null;
+  const loc = { aimag: t(body.aimag, 50), soum: t(body.soum, 80), bag: t(body.bag, 80) };
+  if (!loc.aimag) throw new HttpError(400, 'Аймаг / хотыг сонгоно уу');
+  if (!AIMAGS.includes(loc.aimag)) throw new HttpError(400, 'Аймаг / хот буруу байна');
+  if (!loc.soum) throw new HttpError(400, 'Сум / дүүргийг оруулна уу');
+  return loc;
+}
+
 app.post('/api/farms', need('viewer'), async (req, res) => {
   const name = checkName(req.body.name, 'Фермийн нэрийг', 100);
   const note = req.body.note ? String(req.body.note).trim().slice(0, 500) : null;
+  const loc = checkLocation(req.body);
   let copyFrom = null;
   const useTemplate = req.body.copy_from === 'template';
   if (req.body.copy_from && !useTemplate) {
@@ -294,7 +307,8 @@ app.post('/api/farms', need('viewer'), async (req, res) => {
     if (!canAccessFarm(req.user, copyFrom) && !member) throw new HttpError(400, 'Тохиргоо хуулах ферм олдсонгүй');
   }
   const id = await db.tx(async c => {
-    const { insertId } = await c.run('INSERT INTO farms(name, note, owner_id) VALUES(?, ?, ?)', [name, note, req.user.id]);
+    const { insertId } = await c.run('INSERT INTO farms(name, note, aimag, soum, bag, owner_id) VALUES(?, ?, ?, ?, ?, ?)',
+      [name, note, loc.aimag, loc.soum, loc.bag, req.user.id]);
     if (copyFrom) await copyFarmSettings(c, copyFrom.id, insertId);
     if (useTemplate) await applyTemplate(c, insertId);
     return insertId;
@@ -314,8 +328,10 @@ app.patch('/api/farms/:id', need('viewer'), async (req, res) => {
   const farm = await farmById(req);
   const name = req.body.name !== undefined ? checkName(req.body.name, 'Фермийн нэрийг', 100) : farm.name;
   const note = req.body.note !== undefined ? (String(req.body.note || '').trim().slice(0, 500) || null) : farm.note;
-  await db.run('UPDATE farms SET name = ?, note = ? WHERE id = ?', [name, note, farm.id]);
-  await audit(req.user.id, 'Ферм засав', 'farms', farm.id, name, farm.id);
+  // Байршлыг илгээсэн үед л шалгаж шинэчилнэ
+  const loc = req.body.aimag !== undefined ? checkLocation(req.body) : { aimag: farm.aimag, soum: farm.soum, bag: farm.bag };
+  await db.run('UPDATE farms SET name = ?, note = ?, aimag = ?, soum = ?, bag = ? WHERE id = ?', [name, note, loc.aimag, loc.soum, loc.bag, farm.id]);
+  await audit(req.user.id, 'Ферм засав', 'farms', farm.id, [name, loc.aimag, loc.soum, loc.bag].filter(Boolean).join(' · '), farm.id);
   res.json({ ok: true });
 });
 
@@ -483,11 +499,11 @@ app.get('/api/lookups', async (req, res) => {
   const fid = req.farm.id;
   const activeBySpecies = Object.fromEntries(SPECIES.map(s => [s, 0]));
   for (const r of await db.q(`SELECT a.species, COUNT(*) n FROM animals a WHERE a.farm_id = ?
-    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) GROUP BY a.species`, [fid])) activeBySpecies[r.species] = r.n;
+    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') GROUP BY a.species`, [fid])) activeBySpecies[r.species] = r.n;
   const col = async (sql, params) => (await db.q(sql, params)).map(r => r.v);
   const owner = await db.one('SELECT name FROM users WHERE id = ?', [req.farm.owner_id]);
   res.json({
-    farm: { id: req.farm.id, name: req.farm.name, note: req.farm.note, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
+    farm: { id: req.farm.id, name: req.farm.name, note: req.farm.note, aimag: req.farm.aimag, soum: req.farm.soum, bag: req.farm.bag, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
     species: SPECIES,
     sexes: SEXES,
     classes: await db.q('SELECT species, age_name, age, sex, target_weight FROM animal_classes WHERE farm_id = ? ORDER BY id', [fid]),
@@ -507,7 +523,7 @@ app.get('/api/lookups', async (req, res) => {
       feedName: await col('SELECT name AS v FROM feeds WHERE farm_id = ? UNION SELECT DISTINCT feed_name FROM feed_plan WHERE farm_id = ? ORDER BY 1', [fid, fid])
     },
     animals: await db.q(`SELECT a.id, a.tag_id, a.tag_color, a.species, a.age_name, a.sex,
-      EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AS slaughtered
+      (EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) OR EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')) AS slaughtered
       FROM animals a WHERE a.farm_id = ? ORDER BY a.tag_id`, [fid]),
     tasksDue: (await db.one("SELECT COUNT(*) n FROM tasks WHERE farm_id = ? AND status = 'Төлөвлөсөн' AND date <= CURDATE()", [fid])).n,
     shipDates: await col('SELECT DISTINCT shipped_date AS v FROM slaughters WHERE farm_id = ? AND shipped_date IS NOT NULL ORDER BY v DESC', [fid]),
@@ -546,14 +562,14 @@ app.get('/api/dashboard', async (req, res) => {
   const bySpecies = {};
   for (const a of animals) {
     stats.costTotal += a.total_cost;
-    if (a.state === 'Идэвхтэй' || a.state === 'Товлосон') {
+    if (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон') {
       stats.active++;
       bySpecies[a.species] = (bySpecies[a.species] || 0) + 1;
       if (a.target_status === 'Борлуулах') stats.ready++;
     } else if (a.state === 'Бойлсон') stats.slaughtered++;
     else stats.sold++;
   }
-  const ready = animals.filter(a => (a.state === 'Идэвхтэй' || a.state === 'Товлосон') && a.target_status === 'Борлуулах')
+  const ready = animals.filter(a => (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон') && a.target_status === 'Борлуулах')
     .map(a => ({ id: a.id, tag_id: a.tag_id, species: a.species, age_name: a.current_age_name, last_weight: a.last_weight, target_weight: a.target_weight }));
   const recentWeighings = await db.q(`SELECT w.date, w.weight, a.tag_id FROM weighings w JOIN animals a ON a.id = w.animal_id
     WHERE w.farm_id = ? ORDER BY w.date DESC, w.id DESC LIMIT 8`, [fid]);
@@ -564,7 +580,7 @@ app.get('/api/dashboard', async (req, res) => {
   const today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
   const todayIso = today.toISOString().slice(0, 10);
   const daysSince = iso => Math.round((Date.parse(todayIso) - Date.parse(iso)) / 864e5);
-  const active = animals.filter(a => a.state === 'Идэвхтэй' || a.state === 'Товлосон');
+  const active = animals.filter(a => a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон');
   const adgs = active.map(a => a.adg).filter(v => v != null && v > 0);
   const herd = {
     liveWeight: active.reduce((s, a) => s + (a.last_weight ?? a.initial_weight ?? 0), 0),
@@ -695,6 +711,7 @@ app.delete('/api/r/:res/:id', async (req, res) => {
   if (r.table === 'animals') {
     linked.push(['weighings', (await db.q('SELECT id FROM weighings WHERE animal_id = ?', [id])).map(x => x.id)]);
     linked.push(['slaughters', (await db.q('SELECT id FROM slaughters WHERE animal_id = ?', [id])).map(x => x.id)]);
+    linked.push(['sales', (await db.q("SELECT id FROM sales WHERE animal_id = ? AND kind = 'Амьд'", [id])).map(x => x.id)]);
   }
   const photos = await db.tx(async c => {
     const out = [];
@@ -702,6 +719,8 @@ app.delete('/api/r/:res/:id', async (req, res) => {
       out.push(...await c.q('SELECT filename FROM photos WHERE farm_id = ? AND entity = ? AND entity_id = ?', [fid, entity, eid]));
       await c.run('DELETE FROM photos WHERE farm_id = ? AND entity = ? AND entity_id = ?', [fid, entity, eid]);
     }
+    // Амьдаар зарсан борлуулалт малтайгаа хамт устна
+    if (r.table === 'animals') await c.run("DELETE FROM sales WHERE animal_id = ? AND kind = 'Амьд' AND farm_id = ?", [id, fid]);
     await c.run(`DELETE FROM ${r.table} WHERE id = ? AND farm_id = ?`, [id, fid]);
     return out;
   });
@@ -738,6 +757,12 @@ app.post('/api/animals/:id/to-sell', async (req, res) => {
   res.json({ ok: true, scheduleCancelled: !!s });
 });
 
+// ---------- Махны үлдэгдэл: бойноос гарсан нийт мах − махлаж зарсан ----------
+app.get('/api/meat-stock', async (req, res) => {
+  requirePerm(req, 'sales', 1);
+  res.json(await meatStock(db, req.farm.id, Number(req.query.except) || 0));
+});
+
 // ---------- Мах ачилт: бойлсон гулуузны ачилтын огноог (олноор нь) бүртгэх / цуцлах ----------
 app.post('/api/slaughters/ship', async (req, res) => {
   requirePerm(req, ['sell', 'slaughter'], 2);
@@ -756,7 +781,7 @@ app.post('/api/slaughters/ship', async (req, res) => {
     if (date && date < s.date) throw new HttpError(400, `${s.tag_id}: ачилтын огноо (${date}) бойлох өдрөөс (${s.date}) өмнө байж болохгүй`);
     // Зарагдсан ачилтаас гулуузыг гаргаж/шилжүүлж болохгүй
     if (s.shipped_date && s.shipped_date !== date
-      && await db.one('SELECT 1 x FROM sales WHERE farm_id = ? AND shipped_date = ? AND sold_date IS NOT NULL', [fid, s.shipped_date])) {
+      && await db.one("SELECT 1 x FROM sales WHERE farm_id = ? AND kind = 'Мах' AND shipped_date = ? AND sold_date IS NOT NULL", [fid, s.shipped_date])) {
       throw new HttpError(400, `${s.tag_id}: ${s.shipped_date}-ний ачилт зарагдсан тул өөрчлөх боломжгүй`);
     }
   }

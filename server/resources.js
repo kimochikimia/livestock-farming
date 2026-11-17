@@ -10,6 +10,7 @@ const SPECIES = ['Үхэр', 'Хонь', 'Ямаа', 'Адуу', 'Тэмээ'];
 const SEXES = ['Эр', 'Эм', 'Зассан эр'];
 const TASK_STATUSES = ['Төлөвлөсөн', 'Хийгдсэн', 'Цуцалсан'];
 const SOURCES = ['Худалдаж авсан', 'Төл', 'Бэлэг']; // Малын орлогын төрөл
+const SALE_KINDS = ['Мах', 'Амьд']; // Борлуулалт: махлаж (ачилтаар) / амьдаар
 const PAYOUT_PERIODS = ['Сар бүр', 'Улирал бүр', 'Хагас жил бүр', 'Жил бүр', 'Борлуулалт бүрийн дараа', 'Гэрээний төгсгөлд'];
 // Тэжээлийн жорын багана ↔ тэжээлийн нэр
 const RECIPE_FEEDS = {
@@ -92,7 +93,8 @@ function currentAge(a, ctx) {
   const ageAtPurchase = parseInt(a.age, 10);
   if (!Number.isFinite(ageAtPurchase) || !a.purchase_date) return { age: null, name: a.age_name, cls: null, next: null };
   // Бойлсон/зарагдсан малын нас тэр өдрөөр зогсоно
-  const ref = a.slaughter_date && a.slaughter_date <= todayStr() ? a.slaughter_date : todayStr();
+  const end = a.live_sold_date || a.slaughter_date;
+  const ref = end && end <= todayStr() ? end : todayStr();
   const born = seasonYear(a.purchase_date, bm) - ageAtPurchase + 1;
   const age = Math.max(ageAtPurchase, seasonYear(ref, bm) - born + 1);
   // Ангилал: ижил төрөл (+ хүйс) ба яг тэр нас, эсвэл "N+" ангиллын хамгийн их тохирох нь
@@ -130,14 +132,49 @@ async function resolveTag(v, db, farmId) {
 async function checkWeighing(v, db, farmId) {
   const a = await resolveTag(v, db, farmId);
   if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
+  if (v.date > todayStr()) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) ирээдүйд байж болохгүй`);
   const s = await db.one('SELECT date FROM slaughters WHERE animal_id = ?', [a.id]);
   if (s && v.date > s.date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) бойлох өдрөөс (${s.date}) хойш байж болохгүй`);
+  const ls = await liveSale(db, a.id);
+  if (ls && v.date > ls.sold_date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) амьдаар зарсан өдрөөс (${ls.sold_date}) хойш байж болохгүй`);
 }
+// Махны үлдэгдэл: бүртгэсэн гулуузны нийт жин − махлаж зарсан жин (хуучин ачилтын мөр жингүй бол ачигдсан жин)
+async function meatStock(db, farmId, exceptId = 0) {
+  const total = Number((await db.one('SELECT COALESCE(SUM(carcass_weight), 0) t FROM slaughters WHERE farm_id = ?', [farmId])).t) || 0;
+  const sold = Number((await db.one(`SELECT COALESCE(SUM(COALESCE(s.sold_weight,
+      (SELECT SUM(x.carcass_weight) FROM slaughters x WHERE x.farm_id = s.farm_id AND x.shipped_date = s.shipped_date))), 0) t
+    FROM sales s WHERE s.farm_id = ? AND s.kind = 'Мах' AND s.id <> ?`, [farmId, exceptId || 0])).t) || 0;
+  return { total, sold, available: Math.max(0, total - sold) };
+}
+// Амьдаар зарсан борлуулалт (байвал)
+const liveSale = (db, animalId, exceptId = 0) =>
+  db.one("SELECT id, sold_date FROM sales WHERE animal_id = ? AND kind = 'Амьд' AND id <> ?", [animalId, exceptId]);
 async function checkSlaughter(v, db, farmId) {
+  // Хуучин хэлбэр (зөвхөн date): төлөвлөсөн огноо; гулуузтай бол бодит огноо ч мөн
+  if (!v.planned_date && !v.slaughtered_date) {
+    if (!v.date) throw new HttpError(400, '"Бойнд орох огноо" талбарыг бөглөнө үү');
+    v.planned_date = v.date;
+    if (v.carcass_weight != null) v.slaughtered_date = v.date;
+  }
+  if (v.carcass_weight != null && !v.slaughtered_date) throw new HttpError(400, 'Гулуузны жин оруулахын тулд "Бойнд орсон огноо"-г оруулна уу');
+  v.planned_date = v.planned_date || v.slaughtered_date;
+  v.date = v.slaughtered_date || v.planned_date;
+  if (v.slaughtered_date && v.slaughtered_date > todayStr()) throw new HttpError(400, `"Бойнд орсон огноо" (${v.slaughtered_date}) ирээдүйд байж болохгүй`);
   const a = await resolveTag(v, db, farmId);
+  if (await liveSale(db, a.id)) throw new HttpError(400, `${a.tag_id} амьдаар зарагдсан тул бойлох боломжгүй`);
+  if (v.planned_date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: бойнд орох огноо (${v.planned_date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
   if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
+  // Гулуузны жинг зөвхөн бойлсон (өнгөрсөн/өнөөдрийн) өдөртэй бүртгэнэ
+  if (v.carcass_weight != null && v.date > todayStr()) {
+    throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) болоогүй тул гулуузны жин оруулах боломжгүй — бойлсон өдрийг оруулна уу`);
+  }
   const last = (await db.one('SELECT MAX(date) d FROM weighings WHERE animal_id = ?', [a.id])).d;
-  if (last && v.date < last) throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) сүүлийн жинлэлтийн огнооноос (${last}) өмнө байж болохгүй`);
+  if (last && v.date < last) {
+    // Ирээдүйн огноотой (алдаатай) жинлэлт байвал түүнийг засахыг заана
+    throw new HttpError(400, last > todayStr()
+      ? `${a.tag_id}: сүүлийн жинлэлт ирээдүйн огноотой (${last}) бүртгэгдсэн байна. Жинлэлт цэснээс ${a.tag_id} дээр дарж тэр жинлэлтийн огноог засна уу`
+      : `${a.tag_id}: бойлох өдөр (${v.date}) сүүлийн жинлэлтийн огнооноос (${last}) өмнө байж болохгүй`);
+  }
   // Ачилтын огноог "Мах ачилт"-аас бүртгэнэ — бойлох өдрийг ачилтаас хойш болгож болохгүй
   const s = await db.one('SELECT shipped_date FROM slaughters WHERE animal_id = ?', [a.id]);
   if (s?.shipped_date && s.shipped_date < v.date) throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) ачигдсан огнооноос (${s.shipped_date}) хойш байж болохгүй`);
@@ -237,14 +274,17 @@ const resources = {
           (SELECT w.date FROM weighings w WHERE w.animal_id = a.id ORDER BY w.date DESC, w.id DESC LIMIT 1) AS last_weigh_date,
           (SELECT w.weight FROM weighings w WHERE w.animal_id = a.id ORDER BY w.date DESC, w.id DESC LIMIT 1) AS last_weight,
           (SELECT COUNT(*) FROM weighings w WHERE w.animal_id = a.id) AS weigh_count,
-          s.date AS slaughter_date, s.carcass_weight, s.shipped_date,
-          (SELECT MAX(x.sold_date) FROM sales x WHERE x.farm_id = a.farm_id AND x.shipped_date = s.shipped_date) AS sold_date
+          s.id AS slaughter_id, s.date AS slaughter_date, s.planned_date AS slaughter_planned, s.slaughtered_date, s.carcass_weight, s.shipped_date,
+          (SELECT MAX(x.sold_date) FROM sales x WHERE x.farm_id = a.farm_id AND x.kind = 'Мах' AND x.shipped_date = s.shipped_date) AS carcass_sold_date,
+          (SELECT MAX(x.sold_date) FROM sales x WHERE x.animal_id = a.id AND x.kind = 'Амьд') AS live_sold_date
         FROM animals a
         LEFT JOIN slaughters s ON s.animal_id = a.id
         WHERE a.farm_id = ?
         ORDER BY a.purchase_date DESC, a.id DESC`, [farmId]);
       const ctx = await ageContext(db, farmId);
-      return rows.map(a => {
+      return rows.map(r => {
+        // Зарагдсан өдөр: амьдаар зарсан, эсвэл гулуузны ачилт нь зарагдсан
+        const a = { ...r, sold_date: r.live_sold_date || r.carcass_sold_date, sale_kind: r.live_sold_date ? 'Амьд' : r.carcass_sold_date ? 'Мах' : null };
         // Одоогийн нас, насны нэршил (төллөх улирал бүрт нэг нас ахина)
         const ag = currentAge(a, ctx);
         // Мал дээр бүртгэсэн зорилтот жин байвал түүнийг, үгүй бол одоогийн ангиллын зорилтот жинг ашиглана
@@ -260,8 +300,8 @@ const resources = {
           target_status = target_weight == null ? 'Тохиргоо олдсонгүй'
             : a.last_weight >= target_weight ? 'Борлуулах' : 'Хүрээгүй';
         }
-        // Бойлох өдөр ирээгүй бол "Товлосон" (хуваарьт орсон), өнгөрсөн бол "Бойлсон"
-        const state = a.sold_date ? 'Зарагдсан' : !a.slaughter_date ? 'Идэвхтэй' : a.slaughter_date > todayStr() ? 'Товлосон' : 'Бойлсон';
+        // Бойлох өдөр ирээгүй бол "Бой товлогдсон" (хуваарьт орсон), өнгөрсөн бол "Бойлсон"
+        const state = a.sold_date ? 'Зарагдсан' : !a.slaughter_date ? 'Идэвхтэй' : a.slaughter_date > todayStr() ? 'Бой товлогдсон' : 'Бойлсон';
         return {
           ...a, target_weight, goal_date, goal_adg, total_price, days, gain, adg, target_status, state, total_cost: total_price + n0(a.feed_cost),
           current_age: ag.age, current_age_name: ag.name, next_age_date: ag.next
@@ -402,7 +442,9 @@ const resources = {
   slaughters: {
     table: 'slaughters', title: 'Бой', track: true, photos: true, describe: v => v.tag_id,
     fields: {
-      date: { t: 'date', req: true, label: 'Бойлох өдөр' },
+      date: { t: 'date', label: 'Бойлох өдөр' },
+      planned_date: { t: 'date', label: 'Бойнд орох огноо' },
+      slaughtered_date: { t: 'date', label: 'Бойнд орсон огноо' },
       tag_id: { t: 'text', req: true, max: 50, label: 'Малын ID' },
       carcass_weight: { t: 'num', max: 3000, label: 'Гулуузны жин' }
       // shipped_date — зөвхөн "Мах ачилт"-аар (POST /api/slaughters/ship) бүртгэнэ
@@ -422,42 +464,73 @@ const resources = {
   },
 
   sales: {
-    table: 'sales', title: 'Борлуулалт', track: true, photos: true, describe: v => v.shipped_date,
+    table: 'sales', title: 'Борлуулалт', track: true, photos: true,
+    describe: v => (v.kind === 'Амьд' ? `Амьдаар ${v.sold_date}` : v.shipped_date),
     fields: {
-      shipped_date: { t: 'date', req: true, label: 'Ачигдсан огноо' },
+      kind: { t: 'text', options: SALE_KINDS, label: 'Борлуулалтын төрөл' },
+      tag_id: { t: 'text', max: 50, label: 'Малын ID' },
+      shipped_date: { t: 'date', label: 'Ачигдсан огноо' },
       sold_date: { t: 'date', label: 'Зарсан өдөр' },
       sold_weight: { t: 'num', label: 'Борлуулсан жин' },
       price: { t: 'num', label: 'Зарсан үнэ (₮/кг)' },
+      amount: { t: 'num', label: 'Нийт үнэ' },
       note: { t: 'text', max: 500, label: 'Тэмдэглэл' }
     },
-    // Ачилт бүрт (огноогоор) нэг борлуулалт; огноо нь "Мах ачилт"-д бүртгэгдсэн байх ёстой
+    // Мах: ачилт бүрт (огноогоор) нэг борлуулалт, огноо нь "Мах ачилт"-д бүртгэгдсэн байх ёстой.
+    // Амьд: нэг мал (Малын ID), зарсан өдөр, амьд жин, нийт үнэ. Засахад төрөл өөрчлөгдөхгүй.
     async prepare(v, db, farmId, id) {
-      const old = id ? await db.one('SELECT shipped_date FROM sales WHERE id = ? AND farm_id = ?', [id, farmId]) : null;
-      if (old?.shipped_date !== v.shipped_date
-        && !await db.one('SELECT 1 x FROM slaughters WHERE farm_id = ? AND shipped_date = ? LIMIT 1', [farmId, v.shipped_date])) {
-        throw new HttpError(400, `${v.shipped_date}-нд ачигдсан гулууз алга. Эхлээд "Мах ачилт"-д ачилтыг бүртгэнэ үү`);
+      const old = id ? await db.one('SELECT kind, shipped_date, animal_id FROM sales WHERE id = ? AND farm_id = ?', [id, farmId]) : null;
+      v.kind = old?.kind || v.kind || 'Мах';
+      if (v.kind === 'Амьд') {
+        if (!v.tag_id && old?.animal_id) v.tag_id = (await db.one('SELECT tag_id FROM animals WHERE id = ?', [old.animal_id]))?.tag_id;
+        if (!v.tag_id) throw new HttpError(400, 'Малын ID-г оруулна уу');
+        const a = await resolveTag(v, db, farmId);
+        if (!v.sold_date) throw new HttpError(400, '"Зарсан өдөр"-ийг оруулна уу');
+        if (v.sold_date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: зарсан өдөр (${v.sold_date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
+        const last = (await db.one('SELECT MAX(date) d FROM weighings WHERE animal_id = ?', [a.id])).d;
+        if (last && v.sold_date < last) throw new HttpError(400, `${a.tag_id}: зарсан өдөр (${v.sold_date}) сүүлийн жинлэлтээс (${last}) өмнө байж болохгүй`);
+        if (!(v.amount > 0)) throw new HttpError(400, '"Нийт үнэ"-ийг оруулна уу');
+        if (await liveSale(db, a.id, id)) throw new HttpError(409, `${a.tag_id} аль хэдийн зарагдсан байна`);
+        // Бойн хуваарьтай (товлосон) мал: гулууз/ачилт бүртгэгдээгүй бол хуваарийг цуцалж амьдаар зарна
+        const s = await db.one('SELECT id, carcass_weight, shipped_date FROM slaughters WHERE animal_id = ?', [a.id]);
+        if (s && (s.carcass_weight != null || s.shipped_date)) {
+          throw new HttpError(400, `${a.tag_id}: гулуузны жин эсвэл ачилт бүртгэгдсэн тул амьдаар зарах боломжгүй`);
+        }
+        if (s) {
+          await db.run('DELETE FROM photos WHERE farm_id = ? AND entity = ? AND entity_id = ?', [farmId, 'slaughters', s.id]);
+          await db.run('DELETE FROM slaughters WHERE id = ?', [s.id]);
+        }
+        v.shipped_date = v.sold_date; v.price = null;
+        return;
       }
-      if (await db.one('SELECT 1 x FROM sales WHERE farm_id = ? AND shipped_date = ? AND id <> ?', [farmId, v.shipped_date, id || 0])) {
-        throw new HttpError(409, `${v.shipped_date}-ний ачилтын борлуулалт аль хэдийн бүртгэгдсэн байна`);
+      // Мах: бойноос гарсан махны үлдэгдлээс кг + ₮/кг үнээр зарна
+      delete v.tag_id; v.animal_id = null; v.amount = null;
+      if (!v.sold_date) throw new HttpError(400, '"Зарсан өдөр"-ийг оруулна уу');
+      if (!(v.sold_weight > 0)) throw new HttpError(400, '"Зарах жин"-г оруулна уу');
+      if (!(v.price > 0)) throw new HttpError(400, '"1 кг-ийн үнэ"-ийг оруулна уу');
+      const stock = await meatStock(db, farmId, id);
+      if (v.sold_weight > stock.available + 1e-9) {
+        throw new HttpError(400, `Зарах боломжтой мах ${Math.round(stock.available * 100) / 100} кг байна`);
       }
+      v.shipped_date = v.sold_date;
     },
-    // Бүртгэсэн борлуулалт + борлуулалт нь бүртгэгдээгүй ачилтууд (auto: 'ship' — үнэ оруулахад борлуулалт болно).
-    // Орлого = борлуулсан жин (оруулаагүй бол ачигдсан жин) × үнэ
+    // Орлого = борлуулсан жин (хуучин ачилтын мөрөнд оруулаагүй бол ачигдсан жин) × үнэ
     async list(db, farmId) {
       const ships = await db.q(`SELECT shipped_date, COUNT(*) heads, COALESCE(SUM(carcass_weight), 0) shipped_weight
         FROM slaughters WHERE farm_id = ? AND shipped_date IS NOT NULL GROUP BY shipped_date`, [farmId]);
       const byDate = new Map(ships.map(s => [s.shipped_date, s]));
-      const sales = (await db.q('SELECT * FROM sales WHERE farm_id = ? ORDER BY shipped_date DESC, id DESC', [farmId])).map(s => {
-        const sh = byDate.get(s.shipped_date);
-        const heads = sh?.heads || 0, shipped_weight = sh?.shipped_weight || 0;
-        const kg = s.sold_weight ?? shipped_weight;
-        return { ...s, heads, shipped_weight, revenue: s.price != null ? kg * s.price : null };
+      const sales = (await db.q(`SELECT s.*, a.tag_id, a.tag_color, a.species FROM sales s LEFT JOIN animals a ON a.id = s.animal_id
+        WHERE s.farm_id = ? ORDER BY s.shipped_date DESC, s.id DESC`, [farmId])).map(s => {
+        if (s.kind === 'Амьд') {
+          // Амьдаар: нэг мал, жин = амьд жин, орлого = нийт үнэ
+          return { ...s, heads: 1, shipped_weight: s.sold_weight, revenue: s.amount,
+            price_kg: s.amount != null && s.sold_weight ? s.amount / s.sold_weight : null };
+        }
+        const kg = s.sold_weight ?? byDate.get(s.shipped_date)?.shipped_weight ?? 0;
+        return { ...s, sold_weight: kg, revenue: s.price != null ? kg * s.price : null, price_kg: s.price };
       });
-      const pending = ships.filter(sh => !sales.some(s => s.shipped_date === sh.shipped_date)).map(sh => ({
-        id: 'ship-' + sh.shipped_date, auto: 'ship', shipped_date: sh.shipped_date, heads: sh.heads, shipped_weight: sh.shipped_weight,
-        sold_date: null, sold_weight: null, price: null, revenue: null, note: null
-      }));
-      return [...pending, ...sales].sort((a, b) => (a.shipped_date < b.shipped_date ? 1 : a.shipped_date > b.shipped_date ? -1 : 0));
+      const d = s => s.sold_date || s.shipped_date;
+      return sales.sort((a, b) => (d(a) < d(b) ? 1 : d(a) > d(b) ? -1 : b.id - a.id));
     }
   },
 
@@ -635,7 +708,7 @@ const resources = {
 
 // Эрхийн модуль: [бичих эрх шалгах модуль(ууд), унших боломжтой модулиуд]
 const RESOURCE_MODULES = {
-  animals: ['animals', ['animals', 'growth', 'sell']],
+  animals: ['animals', ['animals', 'growth', 'sell', 'weighings', 'slaughter']],
   weighings: ['weighings'],
   expenses: ['expenses'],
   slaughters: [['sell', 'slaughter'], ['sell', 'slaughter']],
@@ -661,4 +734,4 @@ function mapDbError(err) {
   return null;
 }
 
-module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE, animalPurchaseExpenses };
+module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE, animalPurchaseExpenses, meatStock };

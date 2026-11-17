@@ -118,7 +118,7 @@ function numberInput(attrs = {}, initial) {
 const BADGE = {
   'Борлуулах': 'green', 'Хүрээгүй': 'amber', 'Тохиргоо олдсонгүй': 'gray',
   'Төлөвлөсөн': 'blue', 'Хийгдсэн': 'green', 'Цуцалсан': 'gray', 'Хүлээгдэж буй': 'amber', 'Бүртгэсэн': 'green', 'Хүчинтэй': 'green', 'Эхлээгүй': 'blue', 'Дууссан': 'gray', 'Зарах малд': 'blue', 'Гараар нэмсэн': 'gray',
-  'Идэвхтэй': 'blue', 'Товлосон': 'amber', 'Бойлсон': 'gray', 'Зарагдсан': 'green',
+  'Идэвхтэй': 'blue', 'Бой товлогдсон': 'amber', 'Бойлсон': 'gray', 'Зарагдсан': 'green',
   pending: 'amber', approved: 'green', rejected: 'red', blocked: 'red'
 };
 const badge = (v, label) => (v ? h('span', { class: 'badge ' + (BADGE[v] || 'gray') }, label ?? v) : '');
@@ -128,20 +128,18 @@ const NAV = [
   { path: 'dashboard', farm: true, module: 'dashboard', label: 'Хянах самбар', icon: '▦' },
   { path: 'animals', farm: true, module: 'animals', label: 'Малын бүртгэл', icon: '◉' },
   { path: 'weighings', farm: true, module: 'weighings', label: 'Жинлэлт', icon: '⚖' },
-  { path: 'growth', farm: true, module: 'growth', label: 'Өсөлтийн мэдээлэл', icon: '↑' },
-  // "Борлуулалт" бүлэг — доторх цэсүүд дэд цэс болж харагдана
-  { group: 'sales', farm: true, label: 'Борлуулалт', icon: '↗' },
-  { path: 'sell', farm: true, parent: 'sales', module: 'sell', label: 'Зарах малын жагсаалт', icon: '✓' },
-  { path: 'slaughter', farm: true, parent: 'sales', module: 'slaughter', label: 'Бойны жагсаалт', icon: '▤' },
-  { path: 'shipping', farm: true, parent: 'sales', module: 'slaughter', label: 'Мах ачилт', icon: '⇪' },
-  { path: 'sales', farm: true, parent: 'sales', module: 'sales', label: 'Борлуулалтын бүртгэл', icon: '₮' },
-  { path: 'expenses', farm: true, module: 'expenses', label: 'Зардлын бүртгэл', icon: '₮' },
-  { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
   // "Тэжээл" бүлэг: бүртгэл (үлдэгдэл, зарцуулалт) ба тооцоо (өртөг, төлөвлөгөө, жор)
   { group: 'feedgroup', farm: true, label: 'Тэжээл', icon: '❦' },
-  { path: 'feed', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн бүртгэл', icon: '▤' },
+  { path: 'feed', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн бүртгэл', permLabel: 'Тэжээл', icon: '▤' },
   { path: 'feedcalc', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн тооцоо', icon: '∑' },
-  { path: 'market', farm: true, module: 'market', label: 'Зах зээл', icon: '∿' },
+  // Бойны бүртгэл: зарахад бэлэн → бойн хуваарь → гулууз → мах ачилт (хуучин 3 цэсийг нэгтгэсэн)
+  { path: 'slaughter', farm: true, module: 'slaughter', label: 'Бойны бүртгэл', icon: '▤' },
+  // "Санхүү" бүлэг: орлого (борлуулалт) ба зарлага
+  { group: 'finance', farm: true, label: 'Санхүү', icon: '₮' },
+  { path: 'expenses', farm: true, parent: 'finance', module: 'expenses', label: 'Зардлын бүртгэл', icon: '⊖' },
+  { path: 'sales', farm: true, parent: 'finance', module: 'sales', label: 'Борлуулалтын бүртгэл', icon: '⊕' },
+  { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
+  // Зах зээлийн судалгаа → Тохиргоо → "Зах зээл" таб
   { path: 'settings', farm: true, full: true, label: 'Тохиргоо', icon: '⚙' },
   { section: 'Админ', min: 'admin' },
   { path: 'users', label: 'Хэрэглэгчид', icon: '☺', min: 'admin', badge: () => state.pendingUsers },
@@ -475,7 +473,8 @@ async function crudSection(container, cfg) {
   // cfg.autoOpen(r, refresh): автомат мөр дээр дарахад (жишээ нь ачилт → борлуулалтын маягт) нээх үйлдэл
   const autoOpen = r => (canWrite && cfg.autoOpen ? () => cfg.autoOpen(r, refresh, canDel) : null);
   const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r, autoOpen(r))) : h('td', { class: 'row-actions' },
-    h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg, r, refresh, canDel); } }, 'Засах'),
+    cfg.extraAction?.(r, refresh) ?? null,
+    h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel); } }, 'Засах'),
     canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeRow(r); } }, 'Устгах') : null));
 
   const tbody = h('tbody'); const tfoot = h('tfoot'); const count = h('span', { class: 'muted small' });
@@ -502,7 +501,7 @@ async function crudSection(container, cfg) {
     const list = filtered();
     tbody.replaceChildren(...list.map(r => h('tr', {
       class: (canWrite && !r.auto) || autoOpen(r) ? 'clickable' : r.auto ? 'auto-row' : null,
-      onclick: r.auto ? autoOpen(r) : canWrite ? () => openForm(cfg, r, refresh, canDel) : null
+      onclick: r.auto ? autoOpen(r) : canWrite ? () => openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel) : null
     }, cfg.columns.map(c => h('td', { class: (c.cls || '') + (NUMERIC.has(c.f) ? ' num' : ''), 'data-label': c.label },
       c.render ? c.render(r) : FMT[c.f || 'text'](r[c.k]))), showActions ? actionCell(r) : null)));
     if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: cfg.columns.length + (showActions ? 1 : 0), class: 'empty' }, cfg.empty || 'Бичлэг алга')));
@@ -529,6 +528,7 @@ async function crudSection(container, cfg) {
     h('div', { class: 'toolbar-right' },
       search, filterEls,
       h('button', { class: 'btn ghost small', type: 'button', onclick: () => exportCsv(cfg, filtered()) }, 'CSV татах'),
+      cfg.toolbarExtra?.(refresh) ?? null,
       canWrite && !cfg.noAdd ? h('button', { class: 'btn primary small', type: 'button', onclick: () => openForm(cfg, null, refresh, canDel) }, cfg.addLabel || '+ Нэмэх') : null));
 
   container.replaceChildren(
@@ -999,7 +999,8 @@ function meterList(rows, fmt, cls) {
 
 PAGES.dashboard = async main => {
   const d = await api('GET', '/api/dashboard');
-  const kpi = (label, value, cls, sub) => h('div', { class: 'kpi ' + (cls || '') }, h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
+  const kpi = (label, value, cls, sub) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
+    h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
   const pendingNote = can('admin') && state.lk.pendingUsers
     ? h('a', { class: 'notice', href: '#/users' }, `Баталгаажуулалт хүлээж буй ${state.lk.pendingUsers} хэрэглэгч байна →`) : null;
   const tday = today();
@@ -1026,9 +1027,9 @@ PAGES.dashboard = async main => {
     canMod('tasks') ? item('critical', '!', 'Хоцорсон ажил', A.tasksOverdue, '#/tasks') : null,
     canMod('slaughter') ? item('warning', '⚑', 'Гулуузны жин бүртгээгүй', A.noCarcass.length, '#/slaughter', A.noCarcass.map(a => a.tag_id)) : null,
     canMod('weighings') ? item('warning', '⚖', '30+ хоног жинлээгүй мал', A.needWeigh.length, '#/weighings', A.needWeigh.map(a => a.tag_id)) : null,
-    canMod('growth') ? item('serious', '↘', 'Зорилтоос хоцорч буй өсөлт', A.behind.length, '#/growth', A.behind.map(a => a.tag_id)) : null,
+    canMod('weighings') ? item('serious', '↘', 'Зорилтоос хоцорч буй өсөлт', A.behind.length, '#/weighings', A.behind.map(a => a.tag_id)) : null,
     canMod('slaughter') ? item('info', '▤', '14 хоногт бойлох мал', A.slaughterSoon.length, '#/slaughter', A.slaughterSoon.map(a => `${a.tag_id} (${a.date.slice(5)})`)) : null,
-    canMod('sell') ? item('good', '✓', 'Борлуулахад бэлэн мал', d.stats.ready, '#/sell', d.ready.map(a => a.tag_id)) : null
+    canMod('slaughter') ? item('good', '✓', 'Борлуулахад бэлэн мал', d.stats.ready, '#/slaughter', d.ready.map(a => a.tag_id)) : null
   ].filter(Boolean);
 
   const hasMoney = d.monthly.some(m => m.revenue || m.expense);
@@ -1045,20 +1046,62 @@ PAGES.dashboard = async main => {
         h('td', { 'data-label': 'Огноо' }, `${r.date} (${weekday(r.date)})`), h('td', { 'data-label': 'Ажил' }, r.type),
         h('td', { class: 'note-cell', 'data-label': 'Мал' }, r.tag_id ?? ''), h('td', { 'data-label': 'Хариуцагч' }, r.assignee ?? ''))))))) : null;
 
+  // Бүртгэлтэй мал төрлөөр: нийт, идэвхтэй, хүйсээр (малын бүртгэл харах эрхгүй бол идэвхтэйгээр)
+  const animals = canMod('animals', 1) ? await api('GET', '/api/r/animals').catch(() => null) : null;
+  const isLive = a => a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон';
+  // Тохиргоонд бүртгэлтэй бүх төрөл (тоо 0 байсан ч) + тохиргоонд байхгүй ч малтай төрөл
+  const allSpecies = [...new Set([...(state.lk.species || []), ...(animals || []).map(a => a.species), ...speciesRows.map(r => r.label)])];
+  const speciesCards = allSpecies.map(sp => {
+    if (!animals) { const n = d.bySpecies[sp] || 0; return kpi(sp, `${n} толгой`, '', 'Идэвхтэй'); }
+    const l = animals.filter(a => a.species === sp), live = l.filter(isLive);
+    const sex = [...new Set(live.map(a => a.sex).filter(Boolean))].map(s => `${s} ${live.filter(a => a.sex === s).length}`);
+    return kpi(sp, `${l.length} толгой`, '', l.length ? [`Идэвхтэй ${live.length}`, ...sex].join(' · ') : 'Бүртгэлгүй');
+  });
+  const twoRows = (...kids) => { const list = kids.flat().filter(Boolean);
+    return h('div', { class: 'kpis compact two-rows', style: `--cols:${Math.max(1, Math.ceil(list.length / 2))}` }, list); };
+  const group = (title, ...kids) => h('section', { class: 'dash-group' }, h('h2', { class: 'dash-group-title' }, title), ...kids);
+
   fill(main,
     pendingNote,
-    // Санхүү
-    h('div', { class: 'kpis' },
-      kpi('Борлуулалтын орлого', FMT.money(d.salesTotal), 'pos', d.salesKg ? `${FMT.kg(d.salesKg)} борлуулсан` : null),
-      kpi('Нийт зарлага', FMT.money(d.expenseTotal), 'neg'),
-      kpi('Ашиг', FMT.money(d.profit), d.profit >= 0 ? 'pos' : 'neg', margin != null ? `Ашгийн хувь ${nf0.format(margin)}%` : null),
-      kpi('Малын хөрөнгө', FMT.money(d.herd.assetValue))),
-    // Сүрэг
-    h('div', { class: 'kpis' },
-      kpi('Идэвхтэй мал', nf0.format(d.stats.active), '', speciesRows.map(r => `${r.label} ${r.value}`).join(' · ') || null),
-      kpi('Нийт амьд жин', FMT.kg(d.herd.liveWeight)),
-      kpi('Дундаж өдрийн өсөлт', d.herd.avgAdg != null ? FMT.kg(d.herd.avgAdg) : '—'),
-      kpi('Бойлсон · Зарагдсан', `${d.stats.slaughtered} · ${d.stats.sold}`)),
+    // 1. Мал сүрэг: төрөл бүрийн тоо, сүргийн үзүүлэлт
+    group('Мал сүрэг',
+      // Картуудыг тэнцүү 2 эгнээнд (нягт)
+      twoRows(
+        animals ? kpi('Нийт бүртгэлтэй', `${animals.length} толгой`, '', `Идэвхтэй ${animals.filter(isLive).length}`) : null,
+        speciesCards,
+        // Төллөсөн мал: төлийн бүртгэл дээрх эх малын (давхардалгүй) тоо, энэ онд төллөсөн, төрлөөр
+        animals ? (() => {
+          const calves = animals.filter(a => a.source === 'Төл' && a.mother_tag);
+          const year = tday.slice(0, 4);
+          const mothers = new Set(calves.map(a => a.mother_tag));
+          const yearMothers = new Set(calves.filter(a => String(a.purchase_date).startsWith(year)).map(a => a.mother_tag));
+          const spOf = new Map(animals.map(a => [a.tag_id, a.species]));
+          const bySp = [...new Set([...mothers].map(t => spOf.get(t)).filter(Boolean))]
+            .map(sp => `${sp} ${[...mothers].filter(t => spOf.get(t) === sp).length}`);
+          return kpi('Төллөсөн мал', `${mothers.size} толгой`, '', mothers.size
+            ? [`${year} онд ${yearMothers.size}`, ...bySp].join(' · ') : 'Төллөлт бүртгэгдээгүй');
+        })() : null,
+        // Төл: бүртгэлтэй төлийн тоо, идэвхтэй, энэ онд төрсөн, төрлөөр
+        animals ? (() => {
+          const calves = animals.filter(a => a.source === 'Төл');
+          const year = tday.slice(0, 4);
+          const bySp = [...new Set(calves.map(a => a.species))].map(sp => `${sp} ${calves.filter(a => a.species === sp).length}`);
+          return kpi('Төл', `${calves.length} толгой`, '', calves.length
+            ? [`Идэвхтэй ${calves.filter(isLive).length}`, `${year} онд ${calves.filter(a => String(a.purchase_date).startsWith(year)).length}`, ...bySp].join(' · ')
+            : 'Төл бүртгэгдээгүй');
+        })() : null,
+        kpi('Идэвхтэй мал', nf0.format(d.stats.active), '', speciesRows.map(r => `${r.label} ${r.value}`).join(' · ') || null),
+        kpi('Нийт амьд жин', FMT.kg(d.herd.liveWeight)),
+        kpi('Дундаж өдрийн өсөлт', d.herd.avgAdg != null ? FMT.kg(d.herd.avgAdg) : '—'),
+        kpi('Бойлсон · Зарагдсан', `${d.stats.slaughtered} · ${d.stats.sold}`))),
+    // 2. Санхүү
+    group('Санхүү',
+      h('div', { class: 'kpis' },
+        kpi('Борлуулалтын орлого', FMT.money(d.salesTotal), 'pos', d.salesKg ? `${FMT.kg(d.salesKg)} борлуулсан` : null),
+        kpi('Нийт зарлага', FMT.money(d.expenseTotal), 'neg'),
+        kpi('Ашиг', FMT.money(d.profit), d.profit >= 0 ? 'pos' : 'neg', margin != null ? `Ашгийн хувь ${nf0.format(margin)}%` : null),
+        kpi('Малын хөрөнгө', FMT.money(d.herd.assetValue)))),
+    h('h2', { class: 'dash-group-title' }, 'Анхаарах ба тайлан'),
     h('div', { class: 'grid2 dash-main' },
       attItems.length ? h('section', { class: 'card' }, h('h2', {}, 'Анхаарах'), h('div', { class: 'att-list' }, attItems)) : null,
       hasMoney ? h('section', { class: 'card' }, h('h2', {}, 'Сарын орлого ба зарлага'), monthlyChart(d.monthly)) : null),
@@ -1068,7 +1111,7 @@ PAGES.dashboard = async main => {
         Object.keys(d.herd.bySource).length > 1 ? h('div', { class: 'chips' }, Object.entries(d.herd.bySource).map(([k, v]) => h('span', { class: 'lp-chip' }, `${k} ${v}`))) : null) : null),
     tasksCard,
     h('div', { class: 'grid2' },
-      d.ready.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Борлуулахад бэлэн мал'), canMod('sell') ? h('a', { class: 'btn ghost small', href: '#/sell' }, 'Жагсаалт') : null),
+      d.ready.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Борлуулахад бэлэн мал'), canMod('slaughter') ? h('a', { class: 'btn ghost small', href: '#/slaughter' }, 'Жагсаалт') : null),
         h('table', { class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'ID'), h('th', {}, 'Төрөл'), h('th', { class: 'num' }, 'Сүүлийн жин'), h('th', { class: 'num' }, 'Зорилт'))),
           h('tbody', {}, d.ready.map(a => h('tr', {}, h('td', {}, a.tag_id), h('td', {}, `${a.species} ${a.age_name ?? ''}`), h('td', { class: 'num' }, FMT.kg(a.last_weight)), h('td', { class: 'num' }, FMT.kg(a.target_weight))))))) : null,
@@ -1084,7 +1127,8 @@ PAGES.dashboard = async main => {
           h('td', {}, p.payout_period || ''), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount))))))) : null);
 };
 
-PAGES.animals = main => crudSection(main, {
+PAGES.animals = main => {
+  const cfg = {
   res: 'animals', module: 'animals', photos: true, title: 'Малын бүртгэл', itemName: 'мал', addLabel: '+ Мал бүртгэх',
   columns: [
     { k: 'tag_id', label: 'Малын ID', render: r => h('span', { class: 'tag' }, r.tag_id, r.tag_color ? h('small', {}, ' ' + r.tag_color) : null), csv: r => r.tag_id },
@@ -1100,13 +1144,15 @@ PAGES.animals = main => crudSection(main, {
     { k: 'current_age', label: 'Нас', f: 'num', render: r => h('span', { title: r.next_age_date ? `Дараа нас ахих: ${r.next_age_date}` : null }, r.current_age ?? r.age ?? '') },
     { k: 'sex', label: 'Хүйс' },
     { k: 'initial_weight', label: 'Анхны жин', f: 'kg' },
+    { k: 'target_status', label: 'Зорилтын төлөв', render: targetCell,
+      csv: r => r.target_status + (r.to_sell && r.target_status !== 'Борлуулах' ? ' (Зарах малд)' : '') },
     { k: 'state', label: 'Төлөв', render: r => badge(r.state), csv: r => r.state }
   ],
   totals: ['initial_weight'],
   filters: [
     { k: 'source', label: 'Орлогын төрөл', options: () => ANIMAL_SOURCES },
     { k: 'species', label: 'Төрөл', options: () => state.lk.species },
-    { k: 'state', label: 'Төлөв', options: ['Идэвхтэй', 'Товлосон', 'Бойлсон', 'Зарагдсан'] }
+    { k: 'state', label: 'Төлөв', options: ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан'] }
   ],
   fields: [
     // Эхлээд орлогын төрөл: Худалдаж авсан / Төл / Бэлэг — доорх талбарууд үүнээс хамаарна
@@ -1143,7 +1189,68 @@ PAGES.animals = main => crudSection(main, {
       compute: v => (v.goal_weight !== '' && v.initial_weight !== '' && Number(v.goal_days) > 0
         ? FMT.kg((v.goal_weight - v.initial_weight) / Number(v.goal_days)) + ' / өдөр' : null) }
   ]
-});
+  };
+  // Харагдац: Хураангуй (үндсэн багана) / Дэлгэрэнгүй (бүртгэхэд оруулсан бүх мэдээлэл)
+  const col = k => summary.find(c => c.k === k);
+  const summary = cfg.columns;
+  const detail = [
+    col('tag_id'), col('tag_color'), col('source'),
+    { k: 'mother_tag', label: 'Эх мал' },
+    col('purchase_date'), col('species'),
+    { k: 'age_name', label: 'Насны нэршил (авах үед)' }, { k: 'age', label: 'Нас (авах үед)' },
+    col('current_age_name'), col('current_age'), col('sex'), col('initial_weight'),
+    { k: 'purchase_price', label: 'Авсан үнэ', f: 'money' }, { k: 'market_value', label: 'Зах зээлийн үнэ', f: 'money' },
+    { k: 'goal_weight', label: 'Зорилтот жин', f: 'kg' }, { k: 'goal_days', label: 'Хугацаа (хоног)', f: 'num' },
+    { k: 'goal_date', label: 'Зорилтот огноо' },
+    { k: 'goal_adg', label: 'Өдөрт шаардлагатай өсөлт', f: 'kg' },
+    { k: 'note', label: 'Тэмдэглэл' },
+    col('target_status'), col('state')
+  ];
+  let view = 'summary';
+  try { view = localStorage.getItem('tsf.animalView') === 'detail' ? 'detail' : 'summary'; } catch { /* */ }
+  const apply = () => { cfg.columns = [photoColumn('animals'), ...(view === 'detail' ? detail : summary)]; cfg._photoCol = true; };
+  const viewBtn = (v, label) => h('button', { type: 'button', class: 'seg' + (view === v ? ' active' : ''), 'aria-pressed': String(view === v),
+    onclick: () => {
+      if (view === v) return;
+      view = v;
+      try { localStorage.setItem('tsf.animalView', v); } catch { /* */ }
+      apply(); crudSection(listBox, cfg);
+    } }, label);
+  cfg.toolbarExtra = () => h('div', { class: 'seg-group', role: 'group', 'aria-label': 'Харагдац' },
+    viewBtn('summary', 'Хураангуй'), viewBtn('detail', 'Дэлгэрэнгүй'));
+  apply();
+  // Самбар: хүснэгтийн мэдээллийг нэгтгэсэн үзүүлэлтүүд (бүртгэл өөрчлөгдөхөд шинэчлэгдэнэ)
+  const board = h('div', { class: 'kpis compact sl-board' });
+  const listBox = h('div');
+  main.replaceChildren(board, listBox);
+  async function drawBoard() {
+    const all = await api('GET', '/api/r/animals');
+    const live = all.filter(a => a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон');
+    const cnt = (list, k) => { const m = new Map(); for (const a of list) if (a[k]) m.set(a[k], (m.get(a[k]) || 0) + 1); return [...m].map(([n, c]) => `${n} ${c}`).join(' · '); };
+    const sum = (list, k) => list.reduce((s, a) => s + (Number(a[k]) || 0), 0);
+    const weighed = live.filter(a => a.last_weight != null);
+    const nowKg = sum(weighed, 'last_weight');
+    const startKg = sum(weighed, 'initial_weight');
+    const adgs = live.map(a => a.adg).filter(x => x != null);
+    const ready = live.filter(a => a.target_status === 'Борлуулах').length;
+    const notYet = live.filter(a => a.target_status === 'Хүрээгүй').length;
+    const by = s => all.filter(a => a.state === s).length;
+    const kpi = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
+      h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
+    board.replaceChildren(
+      kpi('Идэвхтэй мал', `${live.length} толгой`, cnt(live, 'species') || null),
+      kpi('Хүйсээр', cnt(live, 'sex') || '—', 'Идэвхтэй мал'),
+      kpi('Нийт бүртгэл', `${all.length} мал`, cnt(all, 'source') || null),
+      kpi('Одоогийн нийт жин', FMT.kg(nowKg), weighed.length ? `Анх ${FMT.kg(startKg)} · нэмэгдсэн ${FMT.kg(nowKg - startKg)}` : null),
+      kpi('Дундаж өдрийн өсөлт', adgs.length ? FMT.kg(adgs.reduce((s, x) => s + x, 0) / adgs.length) : '—', adgs.length ? `${adgs.length} малаар` : null),
+      kpi('Зорилтод хүрсэн', `${ready} толгой`, `Хүрээгүй ${notYet}`, ready ? 'pos' : ''),
+      kpi('Бойлсон · Зарагдсан', `${by('Бойлсон')} · ${by('Зарагдсан')}`, by('Бой товлогдсон') ? `Бой товлогдсон ${by('Бой товлогдсон')}` : null),
+      canMod('expenses', 1) ? kpi('Нийт авсан үнэ', FMT.money(sum(all, 'purchase_price')), null) : null);
+  }
+  cfg.onChange = async () => { await crudSection(listBox, cfg); drawBoard().catch(() => {}); };
+  drawBoard().catch(() => {});
+  return crudSection(listBox, cfg);
+};
 
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
@@ -1191,70 +1298,308 @@ function fillGoalWeight(values, ctrls) {
   }
 }
 
-// Малын бүртгэл + жинлэлтээс автоматаар тооцсон өсөлт, өртгийн мэдээлэл (зөвхөн харах)
-PAGES.growth = main => crudSection(main, {
-  res: 'animals', title: 'Өсөлтийн мэдээлэл', readonly: true, photos: true,
-  columns: [
-    { k: 'tag_id', label: 'Малын ID', render: r => h('span', { class: 'tag' }, r.tag_id, r.tag_color ? h('small', {}, ' ' + r.tag_color) : null), csv: r => r.tag_id },
-    { k: 'species', label: 'Төрөл' },
-    { k: 'current_age_name', label: 'Насны нэршил' },
-    { k: 'initial_weight', label: 'Анхны жин', f: 'kg' },
-    { k: 'target_weight', label: 'Зорилтот жин', f: 'kg' },
-    { k: 'goal_days', label: 'Зорилтот хоног', f: 'num' },
-    { k: 'goal_date', label: 'Зорилтот огноо' },
-    { k: 'target_status', label: 'Зорилтын төлөв', render: r => badge(r.target_status), csv: r => r.target_status },
-    { k: 'last_weigh_date', label: 'Сүүлд жинлэсэн' },
-    { k: 'last_weight', label: 'Сүүлийн жин', f: 'kg' },
-    { k: 'days', label: 'Хоног', f: 'num' },
-    { k: 'gain', label: 'Өсөлт', f: 'kg' },
-    { k: 'adg', label: 'Өдрийн өсөлт', f: 'kg' },
-    { k: 'goal_adg', label: 'Шаардлагатай өдрийн өсөлт', f: 'kg' },
-    { k: 'to_sell', label: '', csv: r => (r.to_sell ? 'Зарах малд' : ''), render: r => {
-      if (r.target_status === 'Борлуулах' || r.state === 'Зарагдсан') return '';
-      // Гараар "Зарах малд" шилжүүлсэн: гулууз бүртгэгдээгүй бол буцааж болно (бойн хуваарь хамт цуцлагдана)
-      if (r.to_sell) {
-        const locked = r.carcass_weight != null;
-        const canBack = !locked && canMod('sell', r.slaughter_date ? 3 : 2);
-        return h('span', { class: 'to-sell-cell' }, badge('Зарах малд'),
-          canBack ? h('button', { type: 'button', class: 'btn ghost xs', title: 'Зарах малын жагсаалтаас буцаах', onclick: async e => {
-            e.stopPropagation();
-            const extra = r.slaughter_date ? `\nБойн хуваарь (${r.slaughter_date}) мөн цуцлагдана.` : '';
-            if (!confirm(`${r.tag_id}-г "Зарах малын жагсаалт"-аас буцаах уу?${extra}`)) return;
-            try { await api('POST', `/api/animals/${r.id}/to-sell`, { value: false }); toast(`${r.tag_id}: буцаагдлаа`); render(); }
-            catch (ex) { toast(ex.message, 'err'); }
-          } }, '← Буцаах') : locked ? h('small', { class: 'muted', title: 'Гулуузны жин бүртгэгдсэн тул буцаах боломжгүй' }, ' гулууз') : null);
-      }
-      if (r.state !== 'Идэвхтэй' || !canMod('sell', 2)) return '';
-      return h('button', { type: 'button', class: 'btn ghost xs', title: 'Зарах малын жагсаалт руу шилжүүлэх', onclick: async e => {
-        e.stopPropagation();
-        if (!confirm(`${r.tag_id} зорилтот жиндээ хүрээгүй байна. "Зарах малын жагсаалт" руу шилжүүлэх үү?`)) return;
-        try { await api('POST', `/api/animals/${r.id}/to-sell`, { value: true }); toast(`${r.tag_id}: Зарах малын жагсаалт руу шилжлээ`); render(); }
-        catch (ex) { toast(ex.message, 'err'); }
-      } }, 'Зарах →');
-    } }
-  ],
-  totals: ['initial_weight', 'last_weight', 'gain'],
-  filters: [
-    { k: 'species', label: 'Төрөл', options: () => state.lk.species },
-    { k: 'target_status', label: 'Зорилт', options: ['Борлуулах', 'Хүрээгүй', 'Тохиргоо олдсонгүй'] }
-  ],
-  fields: []
-});
-
-PAGES.weighings = main => crudSection(main, {
-  res: 'weighings', module: 'weighings', photos: true, title: 'Жинлэлтүүд', itemName: 'жинлэлт', addLabel: '+ Жинлэлт нэмэх',
-  columns: [
-    { k: 'date', label: 'Огноо' }, { k: 'tag_id', label: 'Малын ID' }, { k: 'species', label: 'Төрөл' },
-    { k: 'age_name', label: 'Насны нэршил' }, { k: 'weight', label: 'Жин', f: 'kg' }, { k: 'note', label: 'Тэмдэглэл' }
-  ],
-  filters: [{ k: 'tag_id', label: 'Малын ID', options: rows => uniq(rows, 'tag_id') }, { k: 'species', label: 'Төрөл', options: () => state.lk.species }],
+// ----- Жинлэлт: малын жагсаалт (сүүлийн жин, өсөлтийн тооцоо); мал дээр дарахад жинлэх маягт + жинлэлтийн түүх задарна -----
+const WEIGHING_CFG = {
+  res: 'weighings', module: 'weighings', photos: true, itemName: 'жинлэлт',
   fields: [
-    { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
-    { k: 'tag_id', label: 'Малын ID', req: true, maxlength: 50, suggest: () => activeTags() },
+    { k: 'date', label: 'Огноо', type: 'date', req: true, def: today, get max() { return today(); } },
+    { k: 'tag_id', label: 'Малын ID', req: true, readonly: true },
     { k: 'weight', label: 'Жин (кг)', type: 'number', req: true },
     { k: 'note', label: 'Тэмдэглэл', full: true }
   ]
-});
+};
+const ANIMAL_STATES = ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан'];
+// Малын бүртгэл: зорилтын төлөв + гараар "Зарах малд" шилжүүлсэн бол тэмдэг
+const targetCell = r => h('span', { class: 'to-sell-cell' }, badge(r.target_status),
+  r.to_sell && r.target_status !== 'Борлуулах' && r.state !== 'Зарагдсан' ? badge('Зарах малд') : null);
+// "+ Зарах" (Борлуулалтын бүртгэл) → эхлээд сонголт: Амьд мал зарах / Мах зарах
+const canSellLive = () => canMod('sales', 2);
+function openSellChoice(reload) {
+  const go = fn => () => { dlg.close(); fn(reload).catch(e => toast(e.message, 'err')); };
+  const dlg = modal('Зарах', h('div', { class: 'modal-body' },
+    h('div', { class: 'sell-choices' },
+      h('button', { type: 'button', class: 'sell-choice', onclick: go(openLiveSale) }, h('strong', {}, 'Амьд мал зарах')),
+      h('button', { type: 'button', class: 'sell-choice', onclick: go(openMeatSale) }, h('strong', {}, 'Мах зарах'))),
+    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'))));
+  dlg.classList.add('narrow');
+}
+// Амьд мал зарах: малын жагсаалтаас сонгоод зарсан мэдээллийг оруулна
+async function openLiveSale(reload) {
+  const animals = await api('GET', '/api/r/animals');
+  // Идэвхтэй ба бой товлогдсон (бойлоогүй, гулуузгүй) мал
+  const pool = animals.filter(x => (x.state === 'Идэвхтэй' || x.state === 'Бой товлогдсон') && x.carcass_weight == null && !x.slaughtered_date && !x.shipped_date)
+    .sort((x, y) => String(x.tag_id).localeCompare(String(y.tag_id), undefined, { numeric: true }));
+  let a = null;
+  const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
+  const infoBox = h('div', { class: 'kv-grid sched-info one-col', hidden: true });
+  const date = h('input', { type: 'date', value: today() });
+  const kg = numberInput({ placeholder: 'кг' });
+  const amount = numberInput({ placeholder: '₮' });
+  const perKg = h('span', { class: 'info-value' }, '—');
+  const note = h('input', { maxlength: 500 });
+  const calc = () => { const k = Number(kg.value), s = Number(amount.value); perKg.textContent = k > 0 && s > 0 ? FMT.money(s / k) : '—'; };
+  kg.addEventListener('input', calc); amount.addEventListener('input', calc);
+  const picker = h('select', { required: true, onchange: e => {
+    a = pool.find(x => String(x.id) === e.target.value) || null;
+    infoBox.hidden = !a;
+    infoBox.replaceChildren(...(a ? [
+      info('Төрөл · нэршил', `${a.species} · ${a.current_age_name ?? ''}`),
+      info('Сүүлийн жин', a.last_weight != null ? `${FMT.kg(a.last_weight)} (${a.last_weigh_date})` : null)] : []));
+    date.min = a ? [a.purchase_date, a.last_weigh_date].filter(Boolean).sort().pop() : '';
+    kg.value = a ? a.last_weight ?? a.initial_weight ?? '' : ''; calc();
+  } }, h('option', { value: '' }, '— мал сонгох —'),
+    pool.map(x => h('option', { value: x.id },
+      `${x.tag_id}${x.tag_color ? ` (${x.tag_color})` : ''} · ${x.species} ${x.current_age_name ?? ''}${x.state !== 'Идэвхтэй' ? ` · ${x.state}` : ''}`)));
+  const msg = h('div', { class: 'form-msg' + (pool.length ? '' : ' err') }, pool.length ? '' : 'Зарах боломжтой мал алга');
+  const save = h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах');
+  const field = (label, el) => h('label', { class: 'field full' }, h('span', { class: 'field-label' }, label), el);
+  const form = h('form', { class: 'modal-body' },
+    h('div', { class: 'form-grid' }, field('Мал *', picker)), infoBox,
+    h('div', { class: 'form-grid' },
+      field('Зарсан өдөр *', date), field('Амьд жин (кг)', kg), field('Нийт үнэ ₮ *', amount),
+      h('div', { class: 'field info full' }, h('span', { class: 'field-label' }, '1 кг-ийн үнэ'), perKg),
+      field('Тэмдэглэл', note)),
+    msg,
+    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'), save));
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const fail = t => { msg.className = 'form-msg err'; msg.textContent = t; };
+    if (!a) return fail('Мал сонгоно уу');
+    if (!date.value) return fail('"Зарсан өдөр"-ийг оруулна уу');
+    if (!(Number(amount.value) > 0)) return fail('"Нийт үнэ"-ийг оруулна уу');
+    if (a.slaughter_id && !confirm(`${a.tag_id}-ийн бойн хуваарь цуцлагдаж, амьдаар зарагдана. Үргэлжлүүлэх үү?`)) return;
+    try {
+      save.disabled = true;
+      await api('POST', '/api/r/sales', { kind: 'Амьд', tag_id: a.tag_id, sold_date: date.value,
+        sold_weight: kg.value || null, amount: amount.value, note: note.value || null });
+      dlg.close(); toast(`${a.tag_id}: амьдаар зарагдлаа`); reload();
+    } catch (ex) { fail(ex.message); } finally { save.disabled = false; }
+  });
+  const dlg = modal('Амьд мал зарах', form);
+  dlg.classList.add('narrow');
+  picker.focus();
+}
+// Мах зарах: бойноос гарсан нийт махны үлдэгдлээс кг ба 1 кг-ийн үнийг оруулна
+async function openMeatSale(reload) {
+  const stock = await api('GET', '/api/meat-stock');
+  const avail = Math.round(stock.available * 100) / 100;
+  const date = h('input', { type: 'date', value: today() });
+  const kg = numberInput({ placeholder: 'кг' });
+  const price = numberInput({ placeholder: '₮' });
+  const total = h('span', { class: 'info-value' }, '—');
+  const note = h('input', { maxlength: 500 });
+  const calc = () => { const k = Number(kg.value), p = Number(price.value); total.textContent = k > 0 && p > 0 ? FMT.money(k * p) : '—'; };
+  kg.addEventListener('input', calc); price.addEventListener('input', calc);
+  const msg = h('div', { class: 'form-msg' + (avail > 0 ? '' : ' err') }, avail > 0 ? '' : 'Зарах боломжтой мах алга');
+  const save = h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах');
+  const field = (label, el) => h('label', { class: 'field full' }, h('span', { class: 'field-label' }, label), el);
+  const form = h('form', { class: 'modal-body' },
+    h('div', { class: 'kv-grid sched-info one-col' },
+      h('div', { class: 'kv' }, h('span', {}, 'Зарах боломжтой мах'), h('strong', {}, FMT.kg(avail)))),
+    h('div', { class: 'form-grid' },
+      field('Зарсан өдөр *', date), field('Зарах жин (кг) *', kg), field('1 кг-ийн үнэ ₮ *', price),
+      h('div', { class: 'field info full' }, h('span', { class: 'field-label' }, 'Нийт үнэ'), total),
+      field('Тэмдэглэл', note)),
+    msg,
+    h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'), save));
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const fail = t => { msg.className = 'form-msg err'; msg.textContent = t; };
+    const k = Number(kg.value);
+    if (!date.value) return fail('"Зарсан өдөр"-ийг оруулна уу');
+    if (!(k > 0)) return fail('"Зарах жин"-г оруулна уу');
+    if (k > avail) return fail(`Зарах боломжтой мах ${FMT.kg(avail)} байна`);
+    if (!(Number(price.value) > 0)) return fail('"1 кг-ийн үнэ"-ийг оруулна уу');
+    try {
+      save.disabled = true;
+      await api('POST', '/api/r/sales', { kind: 'Мах', sold_date: date.value, sold_weight: k, price: price.value, note: note.value || null });
+      dlg.close(); toast(`${FMT.kg(k)} мах зарагдлаа`); reload();
+    } catch (ex) { fail(ex.message); } finally { save.disabled = false; }
+  });
+  const dlg = modal('Мах зарах', form);
+  dlg.classList.add('narrow');
+  kg.focus();
+}
+
+PAGES.weighings = async main => {
+  const canWrite = canMod('weighings', 2), canDel = canMod('weighings', 3);
+  const st = PAGES.weighings._st || (PAGES.weighings._st = { q: '', species: '', state: 'live', target: '', open: new Set() });
+  let animals = [], byAnimal = new Map();
+  const tbody = h('tbody'), tfoot = h('tfoot');
+  const count = h('span', { class: 'muted small' });
+  const COLS = 13;
+
+  async function load() {
+    const [a, w] = await Promise.all([api('GET', '/api/r/animals'), api('GET', '/api/r/weighings')]);
+    animals = a;
+    byAnimal = new Map();
+    for (const x of w) (byAnimal.get(x.animal_id) || byAnimal.set(x.animal_id, []).get(x.animal_id)).push(x);
+  }
+  const reload = async () => { await load(); draw(); };
+
+  // Жинлэлтийн түүх: өмнөх жинлэлтээс (эхнийх нь анхны жингээс) өөрчлөлт, хоног, өдрийн өсөлт
+  function history(a) {
+    const list = [...(byAnimal.get(a.id) || [])].sort((x, y) => x.date.localeCompare(y.date) || x.id - y.id);
+    let prev = a.initial_weight != null ? { date: a.purchase_date, weight: a.initial_weight } : null;
+    return list.map(w => {
+      const days = prev ? Math.round((Date.parse(w.date) - Date.parse(prev.date)) / 864e5) : null;
+      const change = prev ? w.weight - prev.weight : null;
+      const row = { ...w, change, days, adg: change != null && days > 0 ? change / days : null };
+      prev = w;
+      return row;
+    }).reverse();
+  }
+
+  const canWeigh = a => canWrite && (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон');
+  // "Жин бүртгэх" товч → жижиг цонх; хадгалмагц тухайн малын түүх нээгдэж шинэ жинлэлт харагдана
+  function openWeigh(a) {
+    const date = h('input', { type: 'date', value: today(), min: a.purchase_date, max: [today(), a.slaughter_date].filter(Boolean).sort()[0], required: true });
+    const weight = numberInput({ required: true, placeholder: 'кг' });
+    const note = h('input', { maxlength: 500 });
+    const msg = h('div', { class: 'form-msg' });
+    const save = h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах');
+    const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
+    const form = h('form', { class: 'modal-body' },
+      h('div', { class: 'kv-grid sched-info' },
+        info('Малын ID', a.tag_id + (a.tag_color ? ` (${a.tag_color})` : '')),
+        info('Төрөл · нэршил', `${a.species} · ${a.current_age_name ?? ''}`),
+        info('Сүүлийн жин', a.last_weight != null ? `${FMT.kg(a.last_weight)} (${a.last_weigh_date})` : a.initial_weight != null ? `${FMT.kg(a.initial_weight)} (анхны)` : null)),
+      h('div', { class: 'form-grid' },
+        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Огноо *'), date),
+        h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Жин (кг) *'), weight),
+        h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
+      msg,
+      h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'), save));
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      save.disabled = true; msg.className = 'form-msg'; msg.textContent = '';
+      try {
+        await api('POST', '/api/r/weighings', { date: date.value, tag_id: a.tag_id, weight: weight.value, note: note.value || null });
+        dlg.close(); toast(`${a.tag_id}: ${FMT.kg(Number(weight.value))} бүртгэгдлээ`);
+        st.open.add(a.id); await reload();
+      } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; save.disabled = false; }
+    });
+    const dlg = modal(`Жин бүртгэх — ${a.tag_id}`, form);
+    weight.focus();
+  }
+
+  function detail(a) {
+    const hist = history(a);
+    const histTable = h('table', { class: 'data compact weigh-hist' },
+      h('thead', {}, h('tr', {}, ['Огноо', 'Жин', 'Өөрчлөлт', 'Хоног', 'Өдрийн өсөлт', 'Тэмдэглэл'].map((t, i) => h('th', { class: i && i < 5 ? 'num' : null }, t)),
+        canWrite ? h('th') : null)),
+      h('tbody', {},
+        hist.map(w => h('tr', {},
+          h('td', {}, w.date), h('td', { class: 'num' }, h('strong', {}, FMT.kg(w.weight))),
+          h('td', { class: 'num ' + (w.change > 0 ? 'pos' : w.change < 0 ? 'neg' : '') }, w.change != null ? (w.change > 0 ? '+' : '') + FMT.kg(w.change) : ''),
+          h('td', { class: 'num' }, w.days ?? ''), h('td', { class: 'num' }, w.adg != null ? FMT.kg(w.adg) : ''),
+          h('td', {}, w.note ?? ''),
+          canWrite ? h('td', { class: 'hist-actions' },
+            h('button', { type: 'button', class: 'btn ghost xs', onclick: e => { e.stopPropagation(); openForm(WEIGHING_CFG, { ...w, tag_id: a.tag_id }, reload, canDel); } }, 'Засах'),
+            canDel ? h('button', { type: 'button', class: 'btn danger xs', onclick: async e => {
+              e.stopPropagation();
+              if (!confirm(`${a.tag_id}: ${w.date}-ний жинлэлтийг устгах уу?`)) return;
+              try { await api('DELETE', `/api/r/weighings/${w.id}`); toast('Устгалаа'); reload(); } catch (ex) { toast(ex.message, 'err'); }
+            } }, 'Устгах') : null) : null)),
+        a.initial_weight != null ? h('tr', { class: 'muted' }, h('td', {}, a.purchase_date), h('td', { class: 'num' }, FMT.kg(a.initial_weight)),
+          h('td', { colspan: 4 }, 'Анхны жин'), canWrite ? h('td') : null) : null,
+        !hist.length && a.initial_weight == null ? h('tr', {}, h('td', { colspan: canWrite ? 7 : 6, class: 'empty' }, 'Жинлэлт алга')) : null));
+    return h('tr', { class: 'weigh-detail' }, h('td', { colspan: COLS },
+      h('div', { class: 'weigh-panel' }, h('div', { class: 'weigh-hist-wrap' }, histTable))));
+  }
+
+  const visible = () => animals.filter(a => (!st.species || a.species === st.species) && (!st.state || (st.state === 'live' ? a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон' : a.state === st.state))
+    && (!st.target || a.target_status === st.target)
+    && (!st.q || [a.tag_id, a.tag_color, a.species, a.current_age_name].some(v => String(v ?? '').toLowerCase().includes(st.q))));
+
+  function draw() {
+    const list = visible();
+    const rows = [];
+    for (const a of list) {
+      const open = st.open.has(a.id);
+      rows.push(h('tr', { class: 'clickable' + (open ? ' open' : ''), onclick: () => { open ? st.open.delete(a.id) : st.open.add(a.id); draw(); } },
+        h('td', { 'data-label': 'Малын ID' }, h('span', { class: 'tag' }, h('span', { class: 'caret' }, open ? '▾' : '▸'), ' ', a.tag_id, a.tag_color ? h('small', {}, ' ' + a.tag_color) : null)),
+        h('td', { 'data-label': 'Төрөл' }, a.species), h('td', { 'data-label': 'Насны нэршил' }, a.current_age_name ?? ''),
+        h('td', { class: 'num', 'data-label': 'Анхны жин' }, FMT.kg(a.initial_weight)),
+        h('td', { 'data-label': 'Сүүлд жинлэсэн' }, a.last_weigh_date ?? ''),
+        h('td', { class: 'num', 'data-label': 'Сүүлийн жин' }, a.last_weight != null ? h('strong', {}, FMT.kg(a.last_weight)) : ''),
+        h('td', { class: 'num', 'data-label': 'Хоног' }, a.days ?? ''),
+        h('td', { class: 'num', 'data-label': 'Өсөлт' }, FMT.kg(a.gain)),
+        h('td', { class: 'num', 'data-label': 'Өдрийн өсөлт' }, a.adg != null ? FMT.kg(a.adg) : ''),
+        h('td', { class: 'num', 'data-label': 'Шаардлагатай өдрийн өсөлт' }, a.goal_adg != null ? FMT.kg(a.goal_adg) : ''),
+        h('td', { class: 'num', 'data-label': 'Зорилтот жин' }, FMT.kg(a.target_weight)),
+        h('td', { 'data-label': 'Зорилтын төлөв' }, badge(a.target_status)),
+        h('td', { class: 'row-actions' }, h('div', { class: 'weigh-actions' },
+          canWeigh(a) ? h('button', { type: 'button', class: 'btn primary small', onclick: e => { e.stopPropagation(); openWeigh(a); } }, 'Жин бүртгэх') : null))));
+      if (open) rows.push(detail(a));
+    }
+    tbody.replaceChildren(...rows);
+    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: COLS, class: 'empty' }, 'Мал алга')));
+    const sum = k => list.reduce((s, a) => s + (Number(a[k]) || 0), 0);
+    tfoot.replaceChildren(list.length ? h('tr', {}, h('td', {}, 'Нийт'), h('td'), h('td'),
+      h('td', { class: 'num', 'data-label': 'Анхны жин' }, FMT.kg(sum('initial_weight'))), h('td'),
+      h('td', { class: 'num', 'data-label': 'Сүүлийн жин' }, FMT.kg(sum('last_weight'))), h('td'),
+      h('td', { class: 'num', 'data-label': 'Өсөлт' }, FMT.kg(sum('gain'))), h('td'), h('td'), h('td'), h('td'), h('td')) : '');
+    count.textContent = `${list.length} мал`;
+    drawBoard(list);
+  }
+
+  // Самбар: харагдаж буй (шүүгдсэн) малын жинлэлтийн үзүүлэлтүүд
+  const board = h('div', { class: 'kpis compact sl-board' });
+  function drawBoard(list) {
+    const tday = today();
+    const kpi = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
+      h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
+    const sum = (l, k) => l.reduce((s, a) => s + (Number(a[k]) || 0), 0);
+    const weighed = list.filter(a => a.last_weight != null);
+    const nowKg = sum(weighed, 'last_weight'), startKg = sum(weighed, 'initial_weight');
+    const withAdg = list.filter(a => a.adg != null);
+    const best = withAdg.reduce((b, a) => (!b || a.adg > b.adg ? a : b), null);
+    const recs = list.flatMap(a => byAnimal.get(a.id) || []);
+    const lastDate = recs.map(w => w.date).sort().pop();
+    const month = tday.slice(0, 7);
+    const stale = list.filter(a => (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон')
+      && dayDiffDays(a.last_weigh_date || a.purchase_date, tday) > 30);
+    const slow = list.filter(a => a.adg != null && a.goal_adg != null && a.adg < a.goal_adg);
+    const ready = list.filter(a => a.target_status === 'Борлуулах').length;
+    board.replaceChildren(
+      kpi('Жинлэсэн мал', `${weighed.length} / ${list.length}`, list.length - weighed.length ? `Жинлээгүй ${list.length - weighed.length}` : 'Бүгд жинлэгдсэн'),
+      kpi('Одоогийн нийт жин', FMT.kg(nowKg), weighed.length ? `Анх ${FMT.kg(startKg)} · +${FMT.kg(nowKg - startKg)}` : null),
+      kpi('Дундаж өдрийн өсөлт', withAdg.length ? FMT.kg(sum(withAdg, 'adg') / withAdg.length) : '—', best ? `Шилдэг ${best.tag_id} · ${FMT.kg(best.adg)}` : null),
+      kpi('Сүүлийн жинлэлт', lastDate || '—', lastDate ? `${recs.filter(w => w.date === lastDate).length} мал жинлэсэн` : null),
+      kpi('Жинлэлтийн тоо', `${recs.length}`, `Энэ сард ${recs.filter(w => w.date.startsWith(month)).length}`),
+      kpi('30+ хоног жинлээгүй', `${stale.length} мал`, stale.length ? stale.slice(0, 4).map(a => a.tag_id).join(', ') : null, stale.length ? 'neg' : ''),
+      kpi('Өсөлт хангалтгүй', `${slow.length} мал`, 'Шаардлагатай өсөлтөөс бага', slow.length ? 'neg' : ''),
+      kpi('Зорилтод хүрсэн', `${ready} мал`, `Хүрээгүй ${list.filter(a => a.target_status === 'Хүрээгүй').length}`, ready ? 'pos' : ''));
+  }
+
+  const sel = (label, key, options) => h('select', { class: 'filter', onchange: e => { st[key] = e.target.value; draw(); } },
+    h('option', { value: '' }, label + ': бүгд'), options.map(o => h('option', { value: o, selected: st[key] === o }, o)));
+  await load();
+  main.replaceChildren(board, h('section', { class: 'card' },
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Жинлэлт'),
+      h('div', { class: 'toolbar-right' },
+        h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', value: st.q, oninput: e => { st.q = e.target.value.trim().toLowerCase(); draw(); } }),
+        sel('Төрөл', 'species', state.lk.species), h('select', { class: 'filter', onchange: e => { st.state = e.target.value; draw(); } },
+          h('option', { value: '' }, 'Төлөв: бүгд'),
+          // Анхдагч: бойлогдоогүй, зарагдаагүй бүх мал (Идэвхтэй + Бой товлогдсон) — жинлэгдэх ёстой
+          h('option', { value: 'live', selected: st.state === 'live' }, 'Идэвхтэй + бой товлогдсон'),
+          ANIMAL_STATES.map(o => h('option', { value: o, selected: st.state === o }, o))),
+        sel('Зорилт', 'target', ['Борлуулах', 'Хүрээгүй', 'Тохиргоо олдсонгүй']))),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data weigh-table' },
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Малын ID'), h('th', {}, 'Төрөл'), h('th', {}, 'Насны нэршил'), h('th', { class: 'num' }, 'Анхны жин'),
+        h('th', {}, 'Сүүлд жинлэсэн'), h('th', { class: 'num' }, 'Сүүлийн жин'), h('th', { class: 'num' }, 'Хоног'),
+        h('th', { class: 'num' }, 'Өсөлт'), h('th', { class: 'num' }, 'Өдрийн өсөлт'), h('th', { class: 'num' }, 'Шаардлагатай өдрийн өсөлт'),
+        h('th', { class: 'num' }, 'Зорилтот жин'), h('th', {}, 'Зорилтын төлөв'), h('th', { class: 'row-actions' }))),
+      tbody, tfoot)),
+    h('div', { class: 'table-foot' }, count)));
+  draw();
+};
 
 const FEED_TYPE = 'Тэжээл';
 const FEED_UNITS = ['кг', 'боодол'];
@@ -1266,7 +1611,43 @@ function fillFeedPrice(values, ctrls) {
   if (values.unit === 'боодол') { if (f.bale_kg) setFormValue(values, ctrls, 'unit_price', f.price * f.bale_kg); }
   else setFormValue(values, ctrls, 'unit_price', f.price);
 }
-PAGES.expenses = main => crudSection(main, {
+// Нягт самбарын карт ба самбартай хүснэгт (бүртгэл өөрчлөгдөхөд самбар шинэчлэгдэнэ)
+const kpiCard = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
+  h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
+async function crudWithBoard(main, cfg, render) {
+  const board = h('div', { class: 'kpis compact sl-board' }), box = h('div');
+  main.replaceChildren(board, box);
+  const upd = async () => {
+    try { board.replaceChildren(...(await render(await api('GET', '/api/r/' + cfg.res))).filter(Boolean)); } catch { /* самбаргүй үлдэнэ */ }
+  };
+  cfg.onChange = async () => { await crudSection(box, cfg); upd(); };
+  upd();
+  return crudSection(box, cfg);
+}
+const monthOf = (d, back = 0) => { const x = new Date(today() + 'T00:00:00Z'); x.setUTCDate(1); x.setUTCMonth(x.getUTCMonth() - back); return x.toISOString().slice(0, 7); };
+
+// Зардлын самбар: нийт, энэ/өмнөх сар, сарын дундаж, төрлөөр том 3, сүүлийн зардал
+function expenseBoard(rows) {
+  const sum = l => l.reduce((s, r) => s + (Number(r.total) || 0), 0);
+  const total = sum(rows);
+  const cur = sum(rows.filter(r => r.date?.startsWith(monthOf())));
+  const prev = sum(rows.filter(r => r.date?.startsWith(monthOf(0, 1))));
+  const months = new Set(rows.map(r => r.date?.slice(0, 7)).filter(Boolean)).size;
+  const byType = new Map();
+  for (const r of rows) byType.set(r.type, (byType.get(r.type) || 0) + (Number(r.total) || 0));
+  const top = [...byType].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const pct = v => (total ? ` · ${Math.round(v / total * 100)}%` : '');
+  const last = [...rows].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  return [
+    kpiCard('Нийт зардал', FMT.money(total), `${rows.length} бичлэг`, 'neg'),
+    kpiCard('Энэ сар', FMT.money(cur), `Өмнөх сар ${FMT.money(prev)}`),
+    kpiCard('Сарын дундаж', months ? FMT.money(total / months) : '—', months ? `${months} сараар` : null),
+    ...top.map(([t, v], i) => kpiCard(`${i + 1}. ${t}`, FMT.money(v), `Нийт зардлын${pct(v).replace(' ·', '')}`)),
+    kpiCard('Сүүлийн зардал', last ? last.date : '—', last ? `${last.type} · ${FMT.money(last.total)}` : null)
+  ];
+}
+
+PAGES.expenses = main => crudWithBoard(main, {
   res: 'expenses', module: 'expenses', photos: true, title: 'Зардлын бүртгэл', itemName: 'зардал', addLabel: '+ Зардал нэмэх',
   // "Мал авсан" мөр малын бүртгэлээс автоматаар орно — үнийг малын бүртгэл дээр засна
   autoAction: r => (canMod('animals', 1) ? h('a', { class: 'btn ghost small', href: '#/animals' }, 'Малын бүртгэл') : null),
@@ -1293,203 +1674,168 @@ PAGES.expenses = main => crudSection(main, {
     { k: 'unit_price', label: 'Нэгж үнэ ₮', type: 'number' },
     { k: 'supplier', label: 'Нийлүүлэгч', full: true, suggest: () => state.lk.suggest.supplier }
   ]
-});
+}, expenseBoard);
 
-// ----- Зарах мал: зорилтот жинд хүрсэн мал + мөр бүрт гараар оруулах бойн хуваарь -----
-PAGES.sell = async main => {
-  const [animals, slaughters] = await Promise.all([api('GET', '/api/r/animals'), api('GET', '/api/r/slaughters')]);
-  const byAnimal = new Map(slaughters.map(s => [s.animal_id, s]));
-  // Зорилтот жинд хүрсэн, эсвэл гараар шилжүүлсэн мал
-  const rows = animals.filter(a => (a.target_status === 'Борлуулах' || a.to_sell) && a.state !== 'Зарагдсан');
-  const canWrite = canMod('sell', 2);
-  const canDel = canMod('sell', 3);
-  const cols = 11;
-  let q = '';
-  const tbody = h('tbody');
+// ----- Бойны бүртгэл: зарахад бэлэн → бой товлогдсон → гулууз хүлээгдэж буй → бойлсон -----
+// Бойноос гарсан мах нийт махны үлдэгдэлд нэмэгдэж, Борлуулалтын бүртгэлийн "Мах зарах"-аар зарагдана
+const SL_STAGES = ['Зарахад бэлэн', 'Бой товлогдсон', 'Гулууз хүлээгдэж буй', 'Бойлсон'];
+const SL_BADGE = { 'Зарахад бэлэн': 'Борлуулах', 'Бой товлогдсон': 'Бой товлогдсон', 'Гулууз хүлээгдэж буй': 'Хүлээгдэж буй', 'Бойлсон': 'Зарагдсан' };
+function slStage(a) {
+  if (!a.slaughter_id) return 'Зарахад бэлэн';
+  if (!a.slaughtered_date) return 'Бой товлогдсон';
+  if (a.carcass_weight == null) return 'Гулууз хүлээгдэж буй';
+  return 'Бойлсон';
+}
+PAGES.slaughter = async main => {
+  const st = PAGES.slaughter._st || (PAGES.slaughter._st = { q: '', species: '', stage: '' });
+  const canSched = canMod('sell', 2) || canMod('slaughter', 2);
+  const canCancel = canMod('sell', 3) || canMod('slaughter', 3);
+  const tday = today();
+  let rows = [];
+  const tbody = h('tbody'), tfoot = h('tfoot');
   const count = h('span', { class: 'muted small' });
+  const board = h('div', { class: 'kpis sl-board' });
+  let stock = null;
 
-  // Мөр дээр дарахад нээгдэх цонх: бойлох өдрийг бүртгэх / засах / цуцлах
-  function openSchedule(a) {
-    const s = byAnimal.get(a.id);
-    const manual = a.to_sell && a.target_status !== 'Борлуулах';
-    const minDate = [a.purchase_date, a.last_weigh_date].filter(Boolean).sort().pop();
-    const date = h('input', { type: 'date', value: s?.date || '', min: minDate, required: true });
+  async function load() {
+    const animals = await api('GET', '/api/r/animals');
+    stock = canMod('sales', 1) ? await api('GET', '/api/meat-stock').catch(() => null) : null;
+    // Бойн бүртгэлтэй мал (амьдаар зарагдаагүй) + бойн хуваарьгүй боловч зорилтод хүрсэн/зарахаар тэмдэглэсэн идэвхтэй мал
+    rows = animals.filter(a => (a.slaughter_id && a.sale_kind !== 'Амьд')
+        || (a.state === 'Идэвхтэй' && (a.target_status === 'Борлуулах' || a.to_sell)))
+      .map(a => ({ ...a, stage: slStage(a),
+        yield_pct: a.carcass_weight != null && a.last_weight ? a.carcass_weight / a.last_weight * 100 : null }))
+      .sort((x, y) => SL_STAGES.indexOf(x.stage) - SL_STAGES.indexOf(y.stage)
+        || String(x.slaughter_date || '').localeCompare(String(y.slaughter_date || '')));
+  }
+  const reload = async () => { await loadLookups(); await load(); draw(); };
+  const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
+  const animalInfo = a => [
+    info('Малын ID', a.tag_id + (a.tag_color ? ` (${a.tag_color})` : '')),
+    info('Төрөл · нэршил', `${a.species} · ${a.current_age_name ?? ''}`),
+    info('Сүүлийн жин', a.last_weight != null ? `${FMT.kg(a.last_weight)} (${a.last_weigh_date})` : null)];
+
+  // Бой бүртгэх: бойнд орох огноо, бойнд орсон огноо, гарсан махны (гулуузны) жин — бүгд гараас
+  function openCarcass(a) {
+    const minD = [a.purchase_date, a.last_weigh_date].filter(Boolean).sort().pop();
+    const planned = h('input', { type: 'date', value: a.slaughter_planned || a.slaughter_date || '', required: true, min: a.purchase_date });
+    const done = h('input', { type: 'date', value: a.slaughtered_date || '', min: minD,
+      max: [tday, a.shipped_date].filter(Boolean).sort()[0] });
+    const kg = numberInput({ placeholder: 'кг' }, a.carcass_weight ?? '');
+    const pct = h('span', { class: 'info-value' }, '—');
+    const calc = () => { const k = Number(kg.value); pct.textContent = k > 0 && a.last_weight ? FMT.pct(k / a.last_weight * 100) : '—'; };
+    const syncKg = () => { kg.disabled = !done.value; if (!done.value) { kg.value = ''; calc(); } };
+    kg.addEventListener('input', calc); done.addEventListener('input', syncKg); calc(); syncKg();
     const msg = h('div', { class: 'form-msg' });
-    const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
     const form = h('form', { class: 'modal-body' },
-      h('div', { class: 'kv-grid sched-info' },
-        info('Малын ID', a.tag_id + (a.tag_color ? ` (${a.tag_color})` : '')),
-        info('Төрөл · нэршил', `${a.species} · ${a.current_age_name ?? ''}`),
-        info('Сүүлийн жин', a.last_weight != null ? `${FMT.kg(a.last_weight)} (${a.last_weigh_date})` : null),
-        info('Зорилтот жин', FMT.kg(a.target_weight))),
-      h('div', { class: 'form-grid' }, h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Бойлох өдөр *'), date)),
+      h('div', { class: 'kv-grid sched-info one-col' }, ...animalInfo(a)),
+      h('div', { class: 'form-grid' },
+        h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Бойнд орох огноо *'), planned),
+        h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Бойнд орсон огноо'), done),
+        h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Гарсан махны жин (кг)'), kg),
+        h('div', { class: 'field info full' }, h('span', { class: 'field-label' }, 'Гарц'), pct)),
       msg,
-      h('div', { class: 'modal-actions' },
-        s && canDel ? h('button', { class: 'btn danger', type: 'button', onclick: async () => {
-          if (!confirm(`${a.tag_id}-ийн бойн хуваарийг цуцлах уу?`)) return;
-          try { await api('DELETE', `/api/r/slaughters/${s.id}`); dlg.close(); toast('Хуваарь цуцлагдлаа'); render(); }
-          catch (e) { msg.className = 'form-msg err'; msg.textContent = e.message; }
-        } }, 'Хуваарь цуцлах') : null,
-        manual && s?.carcass_weight == null && (!s || canDel) ? h('button', { class: 'btn ghost', type: 'button', onclick: async () => {
-          if (!confirm(`${a.tag_id}-г "Зарах малын жагсаалт"-аас буцаах уу?${s ? `\nБойн хуваарь (${s.date}) мөн цуцлагдана.` : ''}`)) return;
-          try { await api('POST', `/api/animals/${a.id}/to-sell`, { value: false }); dlg.close(); toast('Хаслаа'); render(); }
-          catch (e) { msg.className = 'form-msg err'; msg.textContent = e.message; }
-        } }, 'Жагсаалтаас буцаах') : null,
-        h('span', { class: 'spacer' }),
+      h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
         h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')));
     form.addEventListener('submit', async e => {
       e.preventDefault();
-      msg.className = 'form-msg'; msg.textContent = '';
-      if (a.last_weigh_date && date.value < a.last_weigh_date) {
-        msg.className = 'form-msg err'; msg.textContent = `Бойлох өдөр сүүлийн жинлэлтийн огнооноос (${a.last_weigh_date}) өмнө байж болохгүй`; return;
-      }
-      // Гулуузны жин, ачигдсан огноог "Бойны жагсаалт"-аас оруулдаг тул байгаа утгыг нь хадгална
-      const body = { date: date.value, tag_id: a.tag_id, carcass_weight: s?.carcass_weight ?? null, shipped_date: s?.shipped_date ?? null };
       try {
-        if (s) await api('PUT', `/api/r/slaughters/${s.id}`, body);
+        const body = { tag_id: a.tag_id, planned_date: planned.value, slaughtered_date: done.value || null, carcass_weight: kg.value || null };
+        if (a.slaughter_id) await api('PUT', `/api/r/slaughters/${a.slaughter_id}`, body);
         else await api('POST', '/api/r/slaughters', body);
-        dlg.close(); toast(`${a.tag_id}: бойлох өдөр хадгалагдлаа`); render();
+        dlg.close(); toast(`${a.tag_id}: бой бүртгэгдлээ`); reload();
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
     });
-    const dlg = modal(`Бойн хуваарь — ${a.tag_id}`, form);
-    date.focus();
+    const dlg = modal(`Бой бүртгэх — ${a.tag_id}`, form);
+    dlg.classList.add('narrow');
+    (planned.value ? done.value ? kg : done : planned).focus();
   }
 
-  function rowEl(a) {
-    const s = byAnimal.get(a.id);
-    const manual = a.to_sell && a.target_status !== 'Борлуулах';
-    return h('tr', { class: canWrite ? 'clickable' : null, title: canWrite ? 'Бойлох өдөр бүртгэх' : null, onclick: canWrite ? () => openSchedule(a) : null },
-      h('td', {}, h('span', { class: 'tag' }, a.tag_id, a.tag_color ? h('small', {}, ' ' + a.tag_color) : null)),
-      h('td', {}, a.species), h('td', {}, a.current_age_name ?? ''), h('td', {}, a.sex ?? ''),
-      h('td', {}, a.last_weigh_date ?? ''),
-      h('td', { class: 'num' }, FMT.kg(a.last_weight)), h('td', { class: 'num' }, FMT.kg(a.target_weight)),
-      h('td', { class: 'num' }, FMT.kg(a.gain)), h('td', { class: 'num' }, FMT.money(a.total_cost)),
-      h('td', {}, badge(a.state), manual ? h('div', {}, badge('Гараар нэмсэн')) : null),
-      h('td', {}, s?.date ? h('strong', {}, `${s.date} (${weekday(s.date)})`) : h('span', { class: 'muted' }, '—')));
+  async function cancelSchedule(a) {
+    if (!confirm(`${a.tag_id}-ийн бойн бүртгэлийг цуцлах уу?`)) return;
+    try { await api('DELETE', `/api/r/slaughters/${a.slaughter_id}`); toast('Бойн бүртгэл цуцлагдлаа'); reload(); }
+    catch (e) { toast(e.message, 'err'); }
   }
 
-  const els = rows.map(a => ({ a, el: rowEl(a) }));
-  function draw() {
-    const list = els.filter(({ a }) => !q || [a.tag_id, a.tag_color, a.species, a.age_name].some(v => String(v ?? '').toLowerCase().includes(q)));
-    tbody.replaceChildren(...list.map(x => x.el));
-    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: cols, class: 'empty' }, 'Зарах мал алга')));
-    count.textContent = list.length + ' мал';
-  }
-  main.replaceChildren(h('section', { class: 'card' },
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Зарах малын жагсаалт'),
-      h('div', { class: 'toolbar-right' }, h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', oninput: e => { q = e.target.value.trim().toLowerCase(); draw(); } }))),
-    h('div', { class: 'table-wrap' }, enhanceTable(h('table', { class: 'data sell-table' },
-      h('thead', {}, h('tr', {},
-        ['Малын ID', 'Төрөл', 'Насны нэршил', 'Хүйс', 'Сүүлд жинлэсэн'].map(t => h('th', {}, t)),
-        ['Сүүлийн жин', 'Зорилтот жин', 'Өсөлт', 'Нийт өртөг'].map(t => h('th', { class: 'num' }, t)),
-        h('th', {}, 'Төлөв'),
-        h('th', {}, 'Бойлох өдөр'))),
-      tbody))),
-    h('div', { class: 'table-foot' }, count)));
-  draw();
-};
-
-// ----- Мах ачилт: бойлсон гулуузыг ачилтын огноогоор бүртгэнэ; ижил огноотой ачилт = нэг борлуулалт -----
-const SHIP_STATES = ['Ачигдаагүй', 'Ачигдсан', 'Зарагдсан'];
-PAGES.shipping = async main => {
-  const [slaughters, sales] = await Promise.all([api('GET', '/api/r/slaughters'), api('GET', '/api/r/sales')]);
-  const tday = today();
-  const soldDates = new Set(sales.filter(s => !s.auto && s.sold_date).map(s => s.shipped_date));
-  // Зөвхөн бойлсон (бойлох өдөр нь болсон) гулууз; ачигдаагүй нь эхэнд
-  const rows = slaughters.filter(s => s.date <= tday)
-    .map(s => ({ ...s, ship_state: !s.shipped_date ? 'Ачигдаагүй' : soldDates.has(s.shipped_date) ? 'Зарагдсан' : 'Ачигдсан' }))
-    .sort((a, b) => SHIP_STATES.indexOf(a.ship_state) - SHIP_STATES.indexOf(b.ship_state)
-      || String(b.shipped_date || b.date).localeCompare(String(a.shipped_date || a.date)));
-  const canWrite = canMod('slaughter', 2) || canMod('sell', 2);
-  const selected = new Set();
-  let q = '', st = '';
-  const tbody = h('tbody'), tfoot = h('tfoot');
-  const count = h('span', { class: 'muted small' });
-  const shipBtn = h('button', { class: 'btn primary small', type: 'button', disabled: true, onclick: () => openShip(rows.filter(r => selected.has(r.id))) });
-  const selectable = r => canWrite && r.ship_state !== 'Зарагдсан';
-  const reload = async () => { await loadLookups(); await PAGES.shipping(main); };
-
-  // Ачилтын огноо бүртгэх / өөрчлөх / цуцлах (нэг эсвэл олон гулууз)
-  function openShip(list) {
-    if (!list.length) return;
-    const one = list.length === 1 ? list[0] : null;
-    const minDate = list.map(r => r.date).sort().pop();
-    const date = h('input', { type: 'date', value: one?.shipped_date || tday, min: minDate, required: true });
-    const msg = h('div', { class: 'form-msg' });
-    const kg = list.reduce((s, r) => s + (Number(r.carcass_weight) || 0), 0);
-    const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
-    const send = async shipped_date => {
-      msg.className = 'form-msg'; msg.textContent = '';
-      try {
-        await api('POST', '/api/slaughters/ship', { ids: list.map(r => r.id), shipped_date });
-        dlg.close(); toast(shipped_date ? `${list.length} гулууз ${shipped_date}-нд ачигдлаа` : 'Ачилт цуцлагдлаа'); reload();
-      } catch (e) { msg.className = 'form-msg err'; msg.textContent = e.message; }
-    };
-    const form = h('form', { class: 'modal-body' },
-      h('div', { class: 'kv-grid sched-info' },
-        one ? info('Малын ID', one.tag_id + (one.tag_color ? ` (${one.tag_color})` : '')) : info('Гулууз', `${list.length} толгой`),
-        one ? info('Төрөл · нэршил', `${one.species} · ${one.age_name ?? ''}`) : info('Малын ID', list.map(r => r.tag_id).join(', ')),
-        info('Бойлсон өдөр', one ? one.date : null),
-        info('Гулуузны жин', kg ? FMT.kg(kg) : null)),
-      h('div', { class: 'form-grid' }, h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Ачилтын огноо *'), date)),
-      msg,
-      h('div', { class: 'modal-actions' },
-        list.some(r => r.shipped_date) ? h('button', { class: 'btn danger', type: 'button', onclick: () => {
-          if (confirm('Ачилтыг цуцлах уу?')) send(null);
-        } }, 'Ачилт цуцлах') : null,
-        h('span', { class: 'spacer' }),
-        h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
-        h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')));
-    form.addEventListener('submit', e => { e.preventDefault(); send(date.value); });
-    const dlg = modal(one ? `Мах ачилт — ${one.tag_id}` : `Мах ачилт — ${list.length} гулууз`, form);
+  // Шат бүрийн үйлдлүүд; эхнийх нь мөр дээр дарахад ажиллана
+  function actionList(a) {
+    if (!canSched) return [];
+    const cancel = canCancel ? ['Цуцлах', 'danger', () => cancelSchedule(a)] : null;
+    switch (a.stage) {
+      case 'Зарахад бэлэн': return [['Бой бүртгэх', 'primary', () => openCarcass(a)]];
+      case 'Бой товлогдсон': return [['Бой бүртгэх', 'primary', () => openCarcass(a)], cancel].filter(Boolean);
+      case 'Гулууз хүлээгдэж буй': return [['Гулууз бүртгэх', 'primary', () => openCarcass(a)], cancel].filter(Boolean);
+      case 'Бойлсон': return [['Засах', 'ghost', () => openCarcass(a)]];
+      default: return [];
+    }
   }
 
-  const visible = () => rows.filter(r => (!st || r.ship_state === st)
-    && (!q || [r.tag_id, r.tag_color, r.species, r.age_name, r.shipped_date, r.date].some(v => String(v ?? '').toLowerCase().includes(q))));
-  const allBox = h('input', { type: 'checkbox', 'aria-label': 'Бүгдийг сонгох', onchange: e => {
-    for (const r of visible().filter(selectable)) e.target.checked ? selected.add(r.id) : selected.delete(r.id);
-    draw();
-  } });
+  const visible = () => rows.filter(r => (!st.species || r.species === st.species)
+    && (!st.stage || r.stage === st.stage)
+    && (!st.q || [r.tag_id, r.tag_color, r.species, r.current_age_name, r.slaughter_planned, r.slaughtered_date].some(v => String(v ?? '').toLowerCase().includes(st.q))));
+
   function draw() {
     const list = visible();
-    tbody.replaceChildren(...list.map(r => {
-      const cb = h('input', { type: 'checkbox', 'aria-label': 'Сонгох', disabled: !selectable(r), onclick: e => e.stopPropagation(),
-        onchange: e => { e.target.checked ? selected.add(r.id) : selected.delete(r.id); draw(); } });
-      cb.checked = selected.has(r.id);
-      return h('tr', { class: selectable(r) ? 'clickable' : null, onclick: selectable(r) ? () => openShip([r]) : null },
-        h('td', { class: 'pick-cell', 'data-label': 'Сонгох', onclick: e => e.stopPropagation() }, selectable(r) ? cb : null),
-        h('td', { 'data-label': 'Бойлсон өдөр' }, r.date),
-        h('td', { 'data-label': 'Малын ID' }, h('span', { class: 'tag' }, r.tag_id, r.tag_color ? h('small', {}, ' ' + r.tag_color) : null)),
-        h('td', { 'data-label': 'Төрөл' }, r.species), h('td', { 'data-label': 'Насны нэршил' }, r.age_name ?? ''),
-        h('td', { class: 'num', 'data-label': 'Гулуузны жин' }, FMT.kg(r.carcass_weight)),
-        h('td', { 'data-label': 'Ачилтын огноо' }, r.shipped_date ? h('strong', {}, `${r.shipped_date} (${weekday(r.shipped_date)})`) : h('span', { class: 'muted' }, '—')),
-        h('td', { 'data-label': 'Төлөв' }, badge(r.ship_state === 'Ачигдаагүй' ? 'Хүлээгдэж буй' : r.ship_state === 'Ачигдсан' ? 'Идэвхтэй' : 'Зарагдсан', r.ship_state)));
+    tbody.replaceChildren(...list.map(a => {
+      const acts = actionList(a);
+      return h('tr', { class: acts.length ? 'clickable' : null, onclick: acts.length ? acts[0][2] : null },
+        h('td', { 'data-label': 'Малын ID' }, h('span', { class: 'tag' }, a.tag_id, a.tag_color ? h('small', {}, ' ' + a.tag_color) : null)),
+        h('td', { 'data-label': 'Төрөл' }, a.species), h('td', { 'data-label': 'Насны нэршил' }, a.current_age_name ?? ''),
+        h('td', { class: 'num', 'data-label': 'Амьд жин' }, FMT.kg(a.last_weight)),
+        h('td', { 'data-label': 'Бойнд орох огноо' }, a.slaughter_planned ? `${a.slaughter_planned} (${weekday(a.slaughter_planned)})` : ''),
+        h('td', { 'data-label': 'Бойнд орсон огноо' }, a.slaughtered_date ?? ''),
+        h('td', { class: 'num', 'data-label': 'Гулуузны жин' }, FMT.kg(a.carcass_weight)),
+        h('td', { class: 'num', 'data-label': 'Гарц' }, FMT.pct(a.yield_pct)),
+        h('td', { 'data-label': 'Төлөв' }, badge(SL_BADGE[a.stage], a.stage)),
+        h('td', { class: 'row-actions' }, acts.map(([label, cls, fn]) =>
+          h('button', { type: 'button', class: 'btn small ' + cls, onclick: e => { e.stopPropagation(); fn(); } }, label))));
     }));
-    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: 8, class: 'empty' }, 'Бойлсон гулууз алга')));
-    tfoot.replaceChildren(list.length ? h('tr', {}, h('td', {}, 'Нийт'), h('td'), h('td'), h('td'), h('td'),
-      h('td', { class: 'num', 'data-label': 'Гулуузны жин' }, FMT.kg(list.reduce((s, r) => s + (Number(r.carcass_weight) || 0), 0))), h('td'), h('td')) : '');
-    const sel = list.filter(r => selected.has(r.id)).length;
-    for (const id of [...selected]) if (!rows.some(r => r.id === id && selectable(r))) selected.delete(id);
-    shipBtn.textContent = selected.size ? `Сонгосныг ачих (${selected.size})` : 'Сонгосныг ачих';
-    shipBtn.disabled = !selected.size;
-    const pickable = list.filter(selectable);
-    allBox.checked = pickable.length > 0 && sel === pickable.length;
-    count.textContent = `${list.length} гулууз`;
+    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: 10, class: 'empty' }, 'Бичлэг алга')));
+    const sum = k => list.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+    tfoot.replaceChildren(list.length ? h('tr', {}, h('td', {}, 'Нийт'), h('td'), h('td'),
+      h('td', { class: 'num', 'data-label': 'Амьд жин' }, FMT.kg(sum('last_weight'))), h('td'), h('td'),
+      h('td', { class: 'num', 'data-label': 'Гулуузны жин' }, FMT.kg(sum('carcass_weight'))), h('td'), h('td'), h('td')) : '');
+    count.textContent = `${list.length} мал`;
+    drawBoard();
   }
 
-  main.replaceChildren(h('section', { class: 'card' },
-    h('div', { class: 'toolbar' }, h('h2', {}, 'Мах ачилт'),
+  // Самбар: шат бүрийн тоо, гулуузны жин, дундаж гарц, махны үлдэгдэл (төрлийн шүүлтүүрээр)
+  function drawBoard() {
+    const base = rows.filter(r => !st.species || r.species === st.species);
+    const by = s => base.filter(r => r.stage === s);
+    const kgSum = (l, k) => l.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+    const kpi = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || '') }, h('span', { class: 'kpi-label' }, label),
+      h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
+    const ready = by('Зарахад бэлэн'), sched = by('Бой товлогдсон'), wait = by('Гулууз хүлээгдэж буй'), done = by('Бойлсон');
+    const next = sched.map(r => r.slaughter_planned).filter(d => d && d >= tday).sort()[0];
+    const live = kgSum(done.filter(r => r.last_weight), 'last_weight'), carc = kgSum(done.filter(r => r.last_weight), 'carcass_weight');
+    board.replaceChildren(
+      kpi('Зарахад бэлэн', `${ready.length} толгой`, ready.length ? `Амьд жин ${FMT.kg(kgSum(ready, 'last_weight'))}` : null),
+      kpi('Бой товлогдсон', `${sched.length} толгой`, next ? `Ойрын бой ${next} (${weekday(next)})` : null),
+      kpi('Гулууз хүлээгдэж буй', `${wait.length} толгой`, null, wait.length ? 'neg' : ''),
+      kpi('Бойлсон', `${done.length} толгой`, done.length ? `Гулууз ${FMT.kg(kgSum(done, 'carcass_weight'))}` : null),
+      kpi('Дундаж гарц', live ? FMT.pct(carc / live * 100) : '—', live ? `${FMT.kg(carc)} / ${FMT.kg(live)}` : null),
+      stock && !st.species ? kpi('Зарах боломжтой мах', FMT.kg(stock.available), `Нийт ${FMT.kg(stock.total)} · зарсан ${FMT.kg(stock.sold)}`, 'pos') : null);
+  }
+
+  await load();
+  main.replaceChildren(board, h('section', { class: 'card' },
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Бойны бүртгэл'),
       h('div', { class: 'toolbar-right' },
-        h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', oninput: e => { q = e.target.value.trim().toLowerCase(); draw(); } }),
-        h('select', { class: 'filter', onchange: e => { st = e.target.value; draw(); } },
-          h('option', { value: '' }, 'Төлөв: бүгд'), SHIP_STATES.map(s => h('option', { value: s }, s))),
-        canWrite ? shipBtn : null)),
-    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+        h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', value: st.q, oninput: e => { st.q = e.target.value.trim().toLowerCase(); draw(); } }),
+        h('select', { class: 'filter', onchange: e => { st.stage = e.target.value; draw(); } },
+          h('option', { value: '' }, 'Төлөв: бүгд'),
+          SL_STAGES.map(s => h('option', { value: s, selected: st.stage === s }, s))),
+        h('select', { class: 'filter', onchange: e => { st.species = e.target.value; draw(); } },
+          h('option', { value: '' }, 'Төрөл: бүгд'), state.lk.species.map(s => h('option', { value: s, selected: st.species === s }, s))))),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data sl-table' },
       h('thead', {}, h('tr', {},
-        h('th', { class: 'pick-cell' }, canWrite ? allBox : null),
-        ['Бойлсон өдөр', 'Малын ID', 'Төрөл', 'Насны нэршил'].map(t => h('th', {}, t)),
-        h('th', { class: 'num' }, 'Гулуузны жин'), h('th', {}, 'Ачилтын огноо'), h('th', {}, 'Төлөв'))),
+        ['Малын ID', 'Төрөл', 'Насны нэршил'].map(t => h('th', {}, t)),
+        h('th', { class: 'num' }, 'Амьд жин'),
+        ['Бойнд орох огноо', 'Бойнд орсон огноо'].map(t => h('th', {}, t)),
+        ['Гулуузны жин', 'Гарц'].map(t => h('th', { class: 'num' }, t)),
+        h('th', {}, 'Төлөв'), h('th', { class: 'row-actions' }))),
       tbody, tfoot)),
     h('div', { class: 'table-foot' }, count)));
   draw();
@@ -1660,77 +2006,73 @@ PAGES.tasks = async main => {
   draw();
 };
 
-// ----- Бойны жагсаалт: бой хийх огноо товлогдсон мал, гулуузны жин бүртгэх -----
-PAGES.slaughter = main => crudSection(main, {
-  res: 'slaughters', module: 'slaughter', photos: true, noAdd: true, title: 'Бойны жагсаалт', itemName: 'бой',
-  columns: [
-    { k: 'date', label: 'Бойлох өдөр', render: r => `${r.date} (${weekday(r.date)})`, csv: r => r.date },
-    { k: 'tag_id', label: 'Малын ID', render: r => h('span', { class: 'tag' }, r.tag_id, r.tag_color ? h('small', {}, ' ' + r.tag_color) : null), csv: r => r.tag_id },
-    { k: 'species', label: 'Төрөл' },
-    { k: 'age_name', label: 'Насны нэршил' },
-    { k: 'sex', label: 'Хүйс' },
-    { k: 'last_weight', label: 'Амьд жин', f: 'kg' },
-    { k: 'carcass_weight', label: 'Гулуузны жин', f: 'kg' },
-    { k: 'yield_pct', label: 'Гарц', f: 'pct' },
-    { k: 'shipped_date', label: 'Ачигдсан огноо' },
-    { k: 'carcass_status', label: 'Төлөв', render: r => badge(r.carcass_status), csv: r => r.carcass_status }
-  ],
-  totals: ['last_weight', 'carcass_weight'],
-  filters: [
-    { k: 'carcass_status', label: 'Төлөв', options: ['Хүлээгдэж буй', 'Бүртгэсэн'] },
-    { k: 'species', label: 'Төрөл', options: () => state.lk.species }
-  ],
-  fields: [
-    { k: 'tag_id', label: 'Малын ID', req: true, readonly: true },
-    { k: 'date', label: 'Бойлох өдөр', type: 'date', req: true },
-    { k: 'carcass_weight', label: 'Гулуузны жин (кг)', type: 'number' }
-  ]
-});
-
-// ----- Борлуулалтын бүртгэл: "Мах ачилт"-ын огноо бүр нэг мөр; үнэ оруулахад нийт орлого бодогдоно -----
+// ----- Борлуулалтын бүртгэл: амьд мал (нэг мал) ба мах (бойноос гарсан махны үлдэгдлээс кг-аар) -----
 PAGES.sales = async main => {
-  // Ачилт бүрийн толгой, ачигдсан жин (маягтад харуулах, борлуулсан жинг бөглөх)
-  let ships = new Map();
-  const loadShips = async () => { ships = new Map((await api('GET', '/api/r/sales')).map(r => [r.shipped_date, r])); };
-  await loadShips();
-  const shipKg = v => ships.get(v.shipped_date)?.shipped_weight;
   const cfg = {
     res: 'sales', module: 'sales', photos: true, title: 'Борлуулалт', itemName: 'борлуулалт', noAdd: true,
-    empty: 'Ачилт алга. "Мах ачилт"-д гулуузны ачилтыг бүртгэнэ үү',
+    empty: 'Борлуулалт алга',
     columns: [
-      { k: 'shipped_date', label: 'Ачигдсан огноо' }, { k: 'heads', label: 'Толгой', f: 'num' },
-      { k: 'shipped_weight', label: 'Ачигдсан жин', f: 'kg' }, { k: 'sold_date', label: 'Зарсан өдөр' },
-      { k: 'sold_weight', label: 'Борлуулсан жин', f: 'kg' }, { k: 'price', label: 'Үнэ ₮/кг', f: 'money' },
+      { k: 'kind', label: 'Төрөл', render: r => (r.kind === 'Амьд' ? 'Амьд мал' : 'Мах'), csv: r => (r.kind === 'Амьд' ? 'Амьд мал' : 'Мах') },
+      { k: 'sold_date', label: 'Зарсан өдөр', render: r => r.sold_date || r.shipped_date || '', csv: r => r.sold_date || r.shipped_date },
+      { k: 'tag_id', label: 'Мал', render: r => (r.kind === 'Амьд'
+        ? h('span', { class: 'tag' }, r.tag_id ?? '', r.tag_color ? h('small', {}, ' ' + r.tag_color) : null) : ''),
+        csv: r => (r.kind === 'Амьд' ? r.tag_id : '') },
+      { k: 'sold_weight', label: 'Жин', f: 'kg' }, { k: 'price_kg', label: 'Үнэ ₮/кг', f: 'money' },
       { k: 'revenue', label: 'Нийт орлого', f: 'money' },
-      { k: 'status', label: 'Төлөв', render: r => badge(r.auto ? 'Хүлээгдэж буй' : r.sold_date ? 'Зарагдсан' : 'Идэвхтэй',r.auto ? 'Үнэ оруулаагүй' : r.sold_date ? 'Зарагдсан' : 'Зараагүй'),
-        csv: r => (r.auto ? 'Үнэ оруулаагүй' : r.sold_date ? 'Зарагдсан' : 'Зараагүй') },
       { k: 'note', label: 'Тэмдэглэл' }
     ],
-    totals: ['heads', 'shipped_weight', 'revenue'],
-    // Борлуулалт нь бүртгэгдээгүй ачилт: дарахад огноо, жин нь бөглөгдсөн маягт нээгдэнэ
-    autoOpen: (r, refresh, canDel) => openForm(cfg, null, refresh, canDel,
-      { shipped_date: r.shipped_date, sold_weight: r.shipped_weight || null, sold_date: today() }),
-    autoAction: (r, open) => (open ? h('button', { type: 'button', class: 'btn primary small', onclick: e => { e.stopPropagation(); open(); } }, 'Үнэ оруулах') : null),
-    onChange: async () => { await loadShips(); await crudSection(main, cfg); },
+    totals: ['sold_weight', 'revenue'],
+    filters: [{ k: 'kind', label: 'Төрөл', options: ['Мах', 'Амьд'] }],
+    // Баруун дээд: "+ Зарах" — Амьд мал зарах / Мах зарах сонголт
+    toolbarExtra: refresh => (canSellLive()
+      ? h('button', { class: 'btn primary small', type: 'button', onclick: () => openSellChoice(refresh) }, '+ Зарах') : null),
+    rowCfg: r => (r.kind === 'Амьд' ? LIVE_SALE_CFG : null),
+    // Махны борлуулалтыг засах маягт
     fields: [
-      { k: 'shipped_date', label: 'Ачигдсан огноо', type: 'select', req: true, options: () => opt(state.lk.shipDates || []),
-        emptyText: () => 'Ачилт алга',
-        onChange: (values, ctrls) => setFormValue(values, ctrls, 'sold_weight', shipKg(values) ?? '') },
-      { k: 'ship_info', label: 'Толгой · ачигдсан жин', type: 'info',
-        compute: v => { const s = ships.get(v.shipped_date); return s ? `${s.heads} толгой · ${FMT.kg(s.shipped_weight)}` : null; } },
-      { k: 'sold_date', label: 'Зарсан өдөр', type: 'date', def: today },
-      { k: 'sold_weight', label: 'Борлуулсан жин (кг)', type: 'number' },
-      { k: 'price', label: 'Зарсан үнэ ₮/кг', type: 'number', req: true },
-      { k: 'revenue_info', label: 'Нийт орлого', type: 'info',
-        compute: v => { const kg = v.sold_weight !== '' && v.sold_weight != null ? Number(v.sold_weight) : shipKg(v); const p = Number(v.price);
-          return v.price !== '' && v.price != null && kg != null ? FMT.money(kg * p) : null; } },
+      { k: 'sold_date', label: 'Зарсан өдөр', type: 'date', req: true, def: today },
+      { k: 'sold_weight', label: 'Зарсан жин (кг)', type: 'number', req: true },
+      { k: 'price', label: '1 кг-ийн үнэ ₮', type: 'number', req: true },
+      { k: 'revenue_info', label: 'Нийт үнэ', type: 'info',
+        compute: v => (Number(v.sold_weight) > 0 && Number(v.price) > 0 ? FMT.money(Number(v.sold_weight) * Number(v.price)) : null) },
       { k: 'note', label: 'Тэмдэглэл', full: true }
     ]
   };
-  await crudSection(main, cfg);
+  const LIVE_SALE_CFG = {
+    res: 'sales', module: 'sales', photos: true, itemName: 'амьдаар зарсан мал',
+    fields: [
+      { k: 'tag_id', label: 'Малын ID', req: true, readonly: true },
+      { k: 'sold_date', label: 'Зарсан өдөр', type: 'date', req: true },
+      { k: 'sold_weight', label: 'Амьд жин (кг)', type: 'number' },
+      { k: 'amount', label: 'Нийт үнэ ₮', type: 'number', req: true },
+      { k: 'per_kg', label: '1 кг-ийн үнэ', type: 'info',
+        compute: v => (Number(v.sold_weight) > 0 && Number(v.amount) > 0 ? FMT.money(Number(v.amount) / Number(v.sold_weight)) : null) },
+      { k: 'note', label: 'Тэмдэглэл', full: true }
+    ]
+  };
+  // Самбар: нийт ба сарын орлого, мах (кг, ₮/кг), амьд мал (толгой, ₮/толгой), махны үлдэгдэл
+  await crudWithBoard(main, cfg, async rows => {
+    const rev = l => l.reduce((s, r) => s + (Number(r.revenue) || 0), 0);
+    const kgs = l => l.reduce((s, r) => s + (Number(r.sold_weight) || 0), 0);
+    const day = r => r.sold_date || r.shipped_date || '';
+    const meat = rows.filter(r => r.kind !== 'Амьд'), live = rows.filter(r => r.kind === 'Амьд');
+    const meatKg = kgs(meat), meatRev = rev(meat);
+    const stock = await api('GET', '/api/meat-stock').catch(() => null);
+    const last = [...rows].sort((a, b) => day(b).localeCompare(day(a)))[0];
+    return [
+      kpiCard('Нийт орлого', FMT.money(rev(rows)), `${rows.length} борлуулалт`, 'pos'),
+      kpiCard('Энэ сар', FMT.money(rev(rows.filter(r => day(r).startsWith(monthOf())))), `Өмнөх сар ${FMT.money(rev(rows.filter(r => day(r).startsWith(monthOf(0, 1)))))}`),
+      kpiCard('Мах зарсан', FMT.kg(meatKg), FMT.money(meatRev)),
+      kpiCard('Махны дундаж үнэ', meatKg ? FMT.money(meatRev / meatKg) : '—', '1 кг'),
+      kpiCard('Амьд мал зарсан', `${live.length} толгой`, FMT.money(rev(live))),
+      kpiCard('Амьд малын дундаж үнэ', live.length ? FMT.money(rev(live) / live.length) : '—', '1 толгой'),
+      stock ? kpiCard('Зарах боломжтой мах', FMT.kg(stock.available), `Нийт ${FMT.kg(stock.total)}`, stock.available > 0 ? 'pos' : '') : null,
+      kpiCard('Сүүлийн борлуулалт', last ? day(last) : '—', last ? `${last.kind === 'Амьд' ? 'Амьд мал' : 'Мах'} · ${FMT.money(last.revenue)}` : null)
+    ];
+  });
 };
 
-PAGES.market = main => crudSection(main, {
+// Зах зээлийн махны үнийн судалгаа — Тохиргоо → "Зах зээл" таб
+const MARKET_CFG = () => ({
   res: 'market_prices', module: 'market', title: 'Зах зээлийн махны үнийн судалгаа', itemName: 'үнэ', addLabel: '+ Үнэ нэмэх',
   columns: [
     { k: 'year', label: 'Он' }, { k: 'month', label: 'Сар' }, { k: 'quarter', label: 'Улирал' },
@@ -1907,6 +2249,7 @@ const SETTING_TABS = [
       { k: 'breeding_months', label: 'Хээлтүүлэх сар' },
       { k: 'birthing_months', label: 'Төллөх сар' }
     ] }) },
+  { id: 'market', label: 'Зах зээл', cfg: MARKET_CFG },
   { id: 'general', label: 'Ерөнхий' }
 ];
 
@@ -1975,11 +2318,12 @@ PAGES.settings = async main => {
 const VIEW_ONLY_MODS = ['dashboard', 'growth'];
 function permEditor(perms) {
   const selects = {};
-  const rows = NAV.filter(n => n.module).map(n => {
+  // Нэг модулийг хэд хэдэн цэс хуваалцаж болно (Тэжээл, Бой/ачилт) — модуль бүр нэг мөр
+  const rows = NAV.filter((n, i) => n.module && NAV.findIndex(x => x.module === n.module) === i).map(n => {
     selects[n.module] = h('select', { class: 'perm-select' },
       PERM_OPTIONS.filter(([v]) => !VIEW_ONLY_MODS.includes(n.module) || v === 'none' || v === 'view')
         .map(([v, l]) => h('option', { value: v, selected: (perms[n.module] || 'view') === v }, l)));
-    return h('tr', {}, h('td', {}, n.label), h('td', {}, selects[n.module]));
+    return h('tr', {}, h('td', {}, n.permLabel || n.label), h('td', {}, selects[n.module]));
   });
   const setAll = lvl => { for (const [m, sel] of Object.entries(selects)) sel.value = VIEW_ONLY_MODS.includes(m) && lvl !== 'none' ? 'view' : lvl; };
   const el = h('div', { class: 'perm-box full' },
@@ -2081,8 +2425,39 @@ async function membersSettings(box) {
 }
 
 // Ерөнхий: фермийн нэр, тэмдэглэл (тэжээлийн төлөвлөгөөний тохиргоо "Тэжээл" хуудсанд байна)
+// ---------- Фермийн байршил: аймаг/хот, сум/дүүрэг, баг/хороо ----------
+const AIMAGS = ['Архангай', 'Баян-Өлгий', 'Баянхонгор', 'Булган', 'Говь-Алтай', 'Говьсүмбэр', 'Дархан-Уул', 'Дорноговь', 'Дорнод', 'Дундговь',
+  'Завхан', 'Орхон', 'Өвөрхангай', 'Өмнөговь', 'Сүхбаатар', 'Сэлэнгэ', 'Төв', 'Увс', 'Ховд', 'Хөвсгөл', 'Хэнтий', 'Улаанбаатар'];
+const UB_DISTRICTS = ['Багануур', 'Багахангай', 'Баянгол', 'Баянзүрх', 'Налайх', 'Сонгинохайрхан', 'Сүхбаатар', 'Хан-Уул', 'Чингэлтэй'];
+const farmLocation = f => [f?.aimag, f?.soum && (f.aimag === 'Улаанбаатар' ? `${f.soum} дүүрэг` : `${f.soum} сум`),
+  f?.bag && (f.aimag === 'Улаанбаатар' ? `${f.bag} хороо` : `${f.bag} баг`)].filter(Boolean).join(' · ');
+// knownFarms — сумын санал болгох жагсаалтад ашиглах фермүүд (ижил аймгийнх)
+function locationFields(f, knownFarms = []) {
+  const aimag = h('select', { required: true },
+    h('option', { value: '' }, '— сонгох —'), AIMAGS.map(a => h('option', { value: a, selected: f?.aimag === a }, a)));
+  const soum = h('input', { maxlength: 80, required: true, value: f?.soum || '', autocomplete: 'off', class: 'combo-input' });
+  const bag = h('input', { maxlength: 80, value: f?.bag || '' });
+  combo(soum, () => (aimag.value === 'Улаанбаатар' ? UB_DISTRICTS
+    : [...new Set(knownFarms.filter(x => x.aimag === aimag.value && x.soum).map(x => x.soum))].sort()));
+  const soumLabel = h('span', { class: 'field-label' }), bagLabel = h('span', { class: 'field-label' });
+  const relabel = () => {
+    const ub = aimag.value === 'Улаанбаатар';
+    soumLabel.textContent = (ub ? 'Дүүрэг' : 'Сум') + ' *';
+    bagLabel.textContent = ub ? 'Хороо' : 'Баг';
+  };
+  aimag.addEventListener('change', relabel); relabel();
+  return {
+    els: [
+      h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Аймаг / хот *'), aimag),
+      h('label', { class: 'field' }, soumLabel, soum),
+      h('label', { class: 'field' }, bagLabel, bag)],
+    get: () => ({ aimag: aimag.value, soum: soum.value, bag: bag.value })
+  };
+}
+
 function generalSettings(box) {
   const farm = state.lk.farm;
+  const loc = locationFields(farm);
   const name = h('input', { maxlength: 100, required: true, value: farm.name || '' });
   const note = h('textarea', { rows: 3, maxlength: 500 }); note.value = farm.note || '';
   const msg = h('div', { class: 'form-msg' });
@@ -2092,7 +2467,7 @@ function generalSettings(box) {
       onsubmit: async e => {
         e.preventDefault();
         try {
-          await api('PATCH', `/api/farms/${farm.id}`, { name: name.value, note: note.value });
+          await api('PATCH', `/api/farms/${farm.id}`, { name: name.value, note: note.value, ...loc.get() });
           await loadLookups(); toast('Хадгаллаа');
           document.querySelector('.sidebar').replaceWith(sidebar('settings'));
           msg.className = 'form-msg'; msg.textContent = '';
@@ -2101,6 +2476,7 @@ function generalSettings(box) {
     },
     h('div', { class: 'form-grid' },
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
+      ...loc.els,
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
     msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))),
     investorsBox);
@@ -2252,6 +2628,7 @@ PAGES.farms = async main => {
   function farmForm(f) {
     const name = h('input', { maxlength: 100, required: true, value: f?.name || '' });
     const note = h('textarea', { rows: 2, maxlength: 500 }); note.value = f?.note || '';
+    const loc = locationFields(f, farms);
     // Анхдагч: Excel-ийн загвар тохиргоо; эсвэл өөр фермээс хуулах; эсвэл хоосон
     const copy = h('select', {},
       h('option', { value: 'template', selected: true }, 'Загвар тохиргоо (Excel)'),
@@ -2261,6 +2638,7 @@ PAGES.farms = async main => {
     const form = h('form', { class: 'modal-body' },
       h('div', { class: 'form-grid' },
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
+        ...loc.els,
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note),
         !f ? h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тохиргоо'), copy) : null),
       msg,
@@ -2270,9 +2648,9 @@ PAGES.farms = async main => {
     form.addEventListener('submit', async e => {
       e.preventDefault();
       try {
-        if (f) { await api('PATCH', `/api/farms/${f.id}`, { name: name.value, note: note.value }); dlg.close(); toast('Хадгаллаа'); reload(); }
+        if (f) { await api('PATCH', `/api/farms/${f.id}`, { name: name.value, note: note.value, ...loc.get() }); dlg.close(); toast('Хадгаллаа'); reload(); }
         else {
-          const r = await api('POST', '/api/farms', { name: name.value, note: note.value, copy_from: copy.value || null });
+          const r = await api('POST', '/api/farms', { name: name.value, note: note.value, ...loc.get(), copy_from: copy.value || null });
           dlg.close(); toast('Ферм үүслээ'); enter({ id: r.id });
         }
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
@@ -2296,6 +2674,7 @@ PAGES.farms = async main => {
     h('div', { class: 'farm-card-head' },
       h('h3', {}, f.name),
       f.id === state.farmId ? badge('approved', 'Сонгосон') : null),
+    farmLocation(f) ? h('div', { class: 'farm-location' }, '⌖ ', farmLocation(f)) : null,
     !f.mine ? h('div', { class: 'muted small' }, `Эзэмшигч: ${f.owner_name}${f.can_manage ? ` (${f.owner_phone})` : ''}`) : null,
     f.note ? h('p', { class: 'farm-note' }, f.note) : null,
     h('div', { class: 'farm-stats' },

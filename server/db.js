@@ -215,6 +215,19 @@ async function init() {
   await ensureColumn('partners', 'start_date', 'DATE NULL');
   await ensureColumn('partners', 'end_date', 'DATE NULL');
   await ensureColumn('partners', 'note', 'VARCHAR(500) NULL');
+  // Фермийн байршил: аймаг/хот, сум/дүүрэг, баг/хороо
+  await ensureColumn('farms', 'aimag', 'VARCHAR(50) NULL');
+  await ensureColumn('farms', 'soum', 'VARCHAR(80) NULL');
+  await ensureColumn('farms', 'bag', 'VARCHAR(80) NULL');
+  // Борлуулалтын төрөл: "Мах" (ачилтаар) / "Амьд" (малыг амьдаар нь, нэг мал — animal_id, нийт үнэ — amount)
+  await ensureColumn('sales', 'kind', "VARCHAR(10) NOT NULL DEFAULT 'Мах'");
+  await ensureColumn('sales', 'animal_id', 'INT NULL');
+  await ensureColumn('sales', 'amount', 'DOUBLE NULL');
+  // Бой: бойнд орох (төлөвлөсөн) огноо ба бойнд орсон (бодит) огноо. date = бодит || төлөвлөсөн
+  await ensureColumn('slaughters', 'planned_date', 'DATE NULL');
+  await ensureColumn('slaughters', 'slaughtered_date', 'DATE NULL');
+  await pool.query('UPDATE slaughters SET planned_date = date WHERE planned_date IS NULL');
+  await pool.query('UPDATE slaughters SET slaughtered_date = date WHERE slaughtered_date IS NULL AND carcass_weight IS NOT NULL');
   return db;
 }
 
