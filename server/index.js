@@ -832,6 +832,10 @@ app.use((err, req, res, next) => {
   await ensureAdmin();
   await cleanup();
   setInterval(cleanup, 3600e3).unref();
+  // Оношлогоо: мэдээллийн санд бүртгэлтэй боловч файл нь дискэнд алга болсон зураг
+  const photoRows = await db.q('SELECT filename FROM photos');
+  const missing = photoRows.filter(p => !fs.existsSync(path.join(UPLOAD_DIR, p.filename))).length;
+  console.log(`Зураг: ${photoRows.length} бүртгэл, ${missing} файл олдсонгүй`);
   app.listen(PORT, () => console.log(`Livestock Farming: http://localhost:${PORT} (MySQL)`));
 })().catch(e => {
   console.error('Сервер эхэлж чадсангүй:', e.code || '', e.message);

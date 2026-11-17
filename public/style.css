@@ -238,6 +238,13 @@ dialog.modal::backdrop { background: rgba(10, 20, 12, .45); }
 .cell-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cell-thumb span { position: absolute; right: 2px; bottom: 2px; background: rgba(0, 0, 0, .65); color: #fff; font-size: 10px; font-weight: 700; border-radius: 6px; padding: 0 4px; }
 table.data td:has(> .cell-thumb) { padding-top: 4px; padding-bottom: 4px; }
+/* Файл нь олдохгүй зураг: зураасласан зургийн тэмдэг */
+.cell-thumb.missing img, .thumb.missing img, dialog.lightbox.missing .lightbox-img { visibility: hidden; }
+.cell-thumb.missing, .thumb.missing { cursor: default; }
+.cell-thumb.missing::before, .thumb.missing::before {
+  content: ''; position: absolute; inset: 0; margin: auto; width: 55%; height: 55%; opacity: .45;
+  background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2366736a' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='2'/%3E%3Ccircle cx='9' cy='10' r='1.6'/%3E%3Cpath d='M21 16l-5-5-8 8'/%3E%3Cpath d='M3 3l18 18'/%3E%3C/svg%3E");
+}
 
 dialog.lightbox { border: none; padding: 0; background: transparent; max-width: 100vw; max-height: 100vh; width: 100vw; height: 100vh; }
 dialog.lightbox::backdrop { background: rgba(0, 0, 0, .88); }
@@ -260,8 +267,11 @@ dialog.lightbox::backdrop { background: rgba(0, 0, 0, .88); }
 .form-section { font-weight: 700; font-size: 14px; color: var(--brand); border-top: 1px solid var(--border); padding-top: 14px; margin: 4px 0 10px; }
 .field.info .info-value { padding: 7px 10px; border-radius: 8px; background: var(--surface-2); border: 1px dashed var(--border); font-variant-numeric: tabular-nums; min-height: 36px; }
 input.num-input { font-variant-numeric: tabular-nums; }
-.row-actions { text-align: right; white-space: nowrap; width: 1%; }
-.row-actions .btn + .btn { margin-left: 6px; }
+/* Багана аль болох нарийн (1%) — зөвхөн хүснэгт хэлбэрээр харагдах өргөн дэлгэцэд; утсан дээр (карт) огт хэрэглэхгүй */
+@media (min-width: 641px) {
+  .row-actions { text-align: right; white-space: nowrap; width: 1%; }
+  .row-actions .btn + .btn { margin-left: 6px; }
+}
 
 /* ---------- Хуваарьт ажил ---------- */
 .task-groups { display: flex; flex-direction: column; gap: 18px; }
@@ -608,8 +618,14 @@ dialog.modal { overflow-y: auto; overscroll-behavior: contain; }
   table.data:not(.compact) td::before { content: attr(data-label); color: var(--muted); font-weight: 600; font-size: 12px; text-align: left; flex: none; max-width: 48%; }
   table.data:not(.compact) td:not([data-label])::before, table.data:not(.compact) td[data-label=""]::before { content: none; }
   table.data:not(.compact) td:empty { display: none; }
-  table.data:not(.compact) td.row-actions, table.data:not(.compact) td.approve-cell { justify-content: flex-end; flex-wrap: wrap; gap: 6px; padding-top: 10px; width: auto; }
-  table.data:not(.compact) td.row-actions .btn { flex: 1 1 auto; margin-left: 0; }
+  table.data:not(.compact) td.approve-cell { justify-content: flex-end; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
+  /* iPhone Safari нүдийг "width: 1%"-иар нарийн тооцож товчийг картаас гаргадаг — бүтэн өргөн, grid-ээр жигд хуваана */
+  table.data:not(.compact) td.row-actions {
+    display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px;
+    width: 100%; max-width: 100%; box-sizing: border-box; padding-top: 10px; white-space: normal;
+  }
+  table.data:not(.compact) td.row-actions:empty { display: none; }
+  table.data:not(.compact) td.row-actions .btn { width: 100%; min-width: 0; margin: 0; }
   table.data:not(.compact) td.empty { justify-content: center; border: none !important; color: var(--muted); }
   table.data:not(.compact) td.note-cell { max-width: none; }
   table.data:not(.compact) tfoot tr { background: var(--surface-2); }

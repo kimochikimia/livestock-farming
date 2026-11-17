@@ -218,8 +218,21 @@ async function init() {
   return db;
 }
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'data', 'uploads');
+// Зургийн хавтас. Railway дээр контейнерийн диск redeploy бүрт цэвэрлэгддэг тул зураг заавал Volume дотор байх ёстой:
+// Volume холбогдсон бол (RAILWAY_VOLUME_MOUNT_PATH) UPLOAD_DIR түүний дотор байхгүй бол Volume руу шилжүүлнэ.
+const VOLUME = process.env.RAILWAY_VOLUME_MOUNT_PATH;
+let UPLOAD_DIR = process.env.UPLOAD_DIR || (VOLUME ? path.join(VOLUME, 'uploads') : path.join(__dirname, '..', 'data', 'uploads'));
+if (VOLUME) {
+  const rel = path.relative(path.resolve(VOLUME), path.resolve(UPLOAD_DIR));
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    console.warn(`⚠ UPLOAD_DIR (${UPLOAD_DIR}) Volume (${VOLUME}) дотор биш тул ${path.join(VOLUME, 'uploads')} ашиглана`);
+    UPLOAD_DIR = path.join(VOLUME, 'uploads');
+  }
+} else if (process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_PROJECT_ID) {
+  console.warn('⚠ Railway Volume холбогдоогүй байна — зургийн файлууд redeploy бүрт устна. Вэб үйлчилгээнд /data замд Volume холбоно уу.');
+}
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+console.log('Зургийн хавтас:', UPLOAD_DIR);
 
 // ---------- Фермийн тохиргоо (key/value) ----------
 const SETTING_DEFAULTS = {

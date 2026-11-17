@@ -891,10 +891,16 @@ function photoPanel(res, recordId) {
   };
 }
 
+// Зургийн файл серверт олдохгүй (404) бол эвдэрсэн дүрсний оронд "зураггүй" тэмдэг харуулна
+document.addEventListener('error', e => {
+  const img = e.target;
+  if (img?.tagName === 'IMG' && img.src.includes('/api/photo/')) img.closest('.cell-thumb, .thumb, dialog.lightbox')?.classList.add('missing');
+}, true);
+
 const photoColumn = res => ({
   k: 'photo_count', label: 'Зураг', csv: r => r.photo_count,
   render: r => r.photo_first
-    ? h('button', { type: 'button', class: 'cell-thumb', onclick: e => { e.stopPropagation(); openRecordPhotos(r.photo_res || res, r.photo_id ?? r.id); } },
+    ? h('button', { type: 'button', class: 'cell-thumb', onclick: e => { e.stopPropagation(); if (e.currentTarget.classList.contains('missing')) return; openRecordPhotos(r.photo_res || res, r.photo_id ?? r.id); } },
         h('img', { src: `/api/photo/${r.photo_first}`, loading: 'lazy', alt: '' }),
         r.photo_count > 1 ? h('span', {}, r.photo_count) : null)
     : ''
