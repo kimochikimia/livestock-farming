@@ -136,7 +136,10 @@ const NAV = [
   { path: 'sales', farm: true, parent: 'sales', module: 'sales', label: 'Борлуулалтын бүртгэл', icon: '₮' },
   { path: 'expenses', farm: true, module: 'expenses', label: 'Зардлын бүртгэл', icon: '₮' },
   { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
-  { path: 'feed', farm: true, module: 'feed', label: 'Тэжээл', icon: '❦' },
+  // "Тэжээл" бүлэг: бүртгэл (үлдэгдэл, зарцуулалт) ба тооцоо (өртөг, төлөвлөгөө, жор)
+  { group: 'feedgroup', farm: true, label: 'Тэжээл', icon: '❦' },
+  { path: 'feed', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн бүртгэл', icon: '▤' },
+  { path: 'feedcalc', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн тооцоо', icon: '∑' },
   { path: 'market', farm: true, module: 'market', label: 'Зах зээл', icon: '∿' },
   { path: 'settings', farm: true, full: true, label: 'Тохиргоо', icon: '⚙' },
   { section: 'Админ', min: 'admin' },
@@ -1608,11 +1611,10 @@ PAGES.market = main => crudSection(main, {
   ]
 });
 
+// ----- Тэжээл → Тэжээлийн бүртгэл: үлдэгдэл, зарцуулалт -----
 PAGES.feed = async main => {
-  const s = state.lk.settings;
-  const planBox = h('div'); const summaryBox = h('div'); const recipeBox = h('div');
   const stockBox = h('div'); const usageBox = h('div');
-  main.replaceChildren(stockBox, usageBox, summaryBox, planBox, recipeBox);
+  main.replaceChildren(stockBox, usageBox);
   const rerender = async () => { await loadLookups(); await PAGES.feed(main); };
 
   // Тэжээлийн үлдэгдэл: Зардлын бүртгэлийн "Тэжээл" төрлөөр орж ирсэн − зарцуулалт
@@ -1659,6 +1661,14 @@ PAGES.feed = async main => {
       { k: 'note', label: 'Тэмдэглэл', full: true }
     ]
   });
+};
+
+// ----- Тэжээл → Тэжээлийн тооцоо: өртгийн тооцоо, төлөвлөгөө, жор -----
+PAGES.feedcalc = async main => {
+  const s = state.lk.settings;
+  const summaryBox = h('div'); const planBox = h('div'); const recipeBox = h('div');
+  main.replaceChildren(summaryBox, planBox, recipeBox);
+  const rerender = async () => { await loadLookups(); await PAGES.feedcalc(main); };
   await crudSection(planBox, {
     res: 'feed_plan', title: `Тэжээлийн төлөвлөгөө (1 толгой, ${s.plan_days} хоног)`, itemName: 'тэжээл', module: 'feed', rowActions: true, onChange: rerender,
     columns: [
