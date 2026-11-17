@@ -140,7 +140,12 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS expenses (
     id INT AUTO_INCREMENT PRIMARY KEY, ${FARM},
     date DATE NOT NULL, type VARCHAR(100) NOT NULL, description VARCHAR(500) NULL, qty DOUBLE NULL, unit_price DOUBLE NULL,
-    supplier VARCHAR(200) NULL, ${CREATED}
+    supplier VARCHAR(200) NULL, feed_name VARCHAR(100) NULL, unit VARCHAR(10) NULL, ${CREATED}
+  ) ${T}`,
+  `CREATE TABLE IF NOT EXISTS feed_usage (
+    id INT AUTO_INCREMENT PRIMARY KEY, ${FARM},
+    date DATE NOT NULL, feed_name VARCHAR(100) NOT NULL, unit VARCHAR(10) NOT NULL DEFAULT 'кг', qty DOUBLE NOT NULL, note VARCHAR(500) NULL, ${CREATED},
+    INDEX (farm_id, feed_name)
   ) ${T}`,
   `CREATE TABLE IF NOT EXISTS slaughters (
     id INT AUTO_INCREMENT PRIMARY KEY, ${FARM},
@@ -196,6 +201,13 @@ async function init() {
   await ensureColumn('animals', 'source', "VARCHAR(20) NOT NULL DEFAULT 'Худалдаж авсан'");
   await ensureColumn('animals', 'mother_tag', 'VARCHAR(50) NULL');
   await ensureColumn('animals', 'market_value', 'DOUBLE NULL');
+  // Зардлын дэд төрөл: "Тэжээл" төрлийн зардалд тохиргооны тэжээлийн нэр
+  await ensureColumn('expenses', 'feed_name', 'VARCHAR(100) NULL');
+  // Тэжээлийн нэгж (кг / боодол), 1 боодлын жин
+  await ensureColumn('expenses', 'unit', 'VARCHAR(10) NULL');
+  await ensureColumn('feed_usage', 'unit', "VARCHAR(10) NOT NULL DEFAULT 'кг'");
+  await ensureColumn('feeds', 'bale_kg', 'DOUBLE NULL');
+  await pool.query("UPDATE expenses SET unit = 'кг' WHERE feed_name IS NOT NULL AND unit IS NULL");
   // Хөрөнгө оруулагч (partners): хөрөнгө, олгох давтамж, хугацаа
   await ensureColumn('partners', 'phone', 'VARCHAR(20) NULL');
   await ensureColumn('partners', 'invested', 'DOUBLE NULL');
@@ -238,7 +250,7 @@ async function audit(userId, action, entity = null, entityId = null, detail = nu
 // Шинэ ферм үүсгэхэд өөр фермийн тохиргоог хуулна
 const COPYABLE = {
   animal_classes: ['species', 'age_name', 'age', 'sex', 'target_weight'],
-  feeds: ['name', 'price'],
+  feeds: ['name', 'price', 'bale_kg'],
   expense_types: ['name'],
   tag_colors: ['name'],
   task_types: ['name', 'needs_animals'],

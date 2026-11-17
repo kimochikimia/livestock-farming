@@ -569,6 +569,63 @@ function modal(title, body, actions) {
   return dlg;
 }
 
+// Санал болгох жагсаалт (хөтчийн datalist-ийн оронд): талбарын доор (зай хүрэхгүй бол дээр) нээгдэнэ,
+// бичсэн текстээр шүүнэ, сумаар шилжиж Enter-ээр сонгоно. Сонгоход input + change үзэгдэл үүсгэнэ.
+function combo(input, getItems) {
+  let list = null, items = [], active = -1;
+  // Гүйлгэх, гар (keyboard) гарч дэлгэц өөрчлөгдөхөд хаахгүй — талбарыг дагаж байрлалаа шинэчилнэ
+  const follow = () => { if (list) place(); };
+  const close = () => {
+    list?.remove(); list = null; active = -1;
+    window.removeEventListener('resize', follow); window.removeEventListener('scroll', follow, true);
+    window.visualViewport?.removeEventListener('resize', follow);
+  };
+  const pick = s => { input.value = s; close(); input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('change')); };
+  const place = () => {
+    const r = input.getBoundingClientRect();
+    // Утсан дээр гар гарсан үед харагдах өндөр нь visualViewport
+    const vh = window.visualViewport?.height || window.innerHeight;
+    if (r.bottom < 0 || r.top > vh) { close(); return; }
+    const below = vh - r.bottom - 8, above = r.top - 8;
+    const up = below < 160 && above > below;
+    Object.assign(list.style, { left: r.left + 'px', width: r.width + 'px', maxHeight: Math.max(120, Math.min(260, up ? above : below)) + 'px',
+      top: up ? '' : r.bottom + 4 + 'px', bottom: up ? window.innerHeight - r.top + 4 + 'px' : '' });
+  };
+  const highlight = () => [...(list?.children || [])].forEach((li, i) => {
+    li.classList.toggle('active', i === active);
+    if (i === active) li.scrollIntoView({ block: 'nearest' });
+  });
+  function open(filter) {
+    const q = filter ? input.value.trim().toLowerCase() : '';
+    items = getItems().filter(s => !q || String(s).toLowerCase().includes(q));
+    if (!items.length) { close(); return; }
+    if (!list) {
+      list = h('ul', { class: 'combo-list', role: 'listbox' });
+      (input.closest('dialog') || document.body).append(list);
+      window.addEventListener('resize', follow); window.addEventListener('scroll', follow, true);
+      window.visualViewport?.addEventListener('resize', follow);
+    }
+    active = -1;
+    list.replaceChildren(...items.map(s => h('li', {
+      role: 'option', class: s === input.value ? 'selected' : null,
+      onmousedown: e => { e.preventDefault(); pick(s); }
+    }, s)));
+    place();
+  }
+  input.addEventListener('click', () => (list ? close() : open(false)));
+  input.addEventListener('input', e => { if (e.isTrusted) open(true); });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!list) { open(false); return; }
+      active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      highlight();
+    } else if (e.key === 'Enter' && list && active >= 0) { e.preventDefault(); pick(items[active]); }
+    else if (e.key === 'Escape' && list) { e.preventDefault(); e.stopPropagation(); close(); }
+  });
+}
+
 function openForm(cfg, row, onDone, canDel) {
   const isEdit = !!row;
   if (isEdit && cfg.fields.some(f => f.createOnly)) cfg = { ...cfg, fields: cfg.fields.filter(f => !f.createOnly) };
@@ -622,19 +679,17 @@ function openForm(cfg, row, onDone, canDel) {
     } else if (f.type === 'number' && !f.plain) {
       el = numberInput({ name: f.k, required: f.req }, v);
     } else {
-      const listId = f.suggest ? 'dl-' + f.k + '-' + Math.random().toString(36).slice(2, 8) : null;
       el = h('input', {
         name: f.k, type: f.type || 'text', required: f.req, step: f.type === 'number' ? 'any' : null,
         min: f.min ?? (f.type === 'number' ? 0 : null), max: f.max, maxlength: f.maxlength,
-        inputmode: f.type === 'number' ? 'decimal' : null, list: listId, autocomplete: f.suggest ? 'off' : null,
-        readonly: f.readonly
+        inputmode: f.type === 'number' ? 'decimal' : null, autocomplete: f.suggest ? 'off' : null,
+        class: f.suggest ? 'combo-input' : null, readonly: f.readonly
       });
       el.value = v ?? '';
       if (f.suggest) {
-        const dl = h('datalist', { id: listId }, [...new Set(f.suggest(values).filter(Boolean))].map(s => h('option', { value: s })));
-        // Сонгох жагсаалт шиг: дарахад санал болгох утгуудыг шууд нээнэ (гараар бичих боломжтой хэвээр)
-        el.addEventListener('click', () => { try { el.showPicker(); } catch { /* хуучин хөтөч */ } });
-        const wrap = h('div', { class: 'with-list' }, el, dl);
+        // Сонгох жагсаалт шиг: дарахад санал болгох утгууд талбарын доор нээгдэнэ (гараар бичих боломжтой хэвээр)
+        combo(el, () => [...new Set(f.suggest(values).filter(Boolean))]);
+        const wrap = h('div', { class: 'with-list' }, el);
         Object.defineProperty(wrap, 'value', { get: () => el.value, set: x => { el.value = x; } });
         // Жагсаалтаас сонгомогц (input) шууд холбогдох талбаруудыг бөглөнө
         el.addEventListener('input', () => { values[f.k] = el.value; f.onPick?.(values, ctrls); refreshInfo(); });
@@ -968,10 +1023,12 @@ PAGES.dashboard = async main => {
 
   const tasksCard = canMod('tasks') && d.upcomingTasks.length ? h('section', { class: 'card' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Ойрын ажил'), h('a', { class: 'btn ghost small', href: '#/tasks' }, 'Бүгдийг харах')),
-    h('table', { class: 'data compact' },
+    // Утсан дээр мөр бүр карт болж харагдана (data-label)
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
       h('thead', {}, h('tr', {}, ['Огноо', 'Ажил', 'Мал', 'Хариуцагч'].map(x => h('th', {}, x)))),
       h('tbody', {}, d.upcomingTasks.map(r => h('tr', { class: r.date < tday ? 'overdue-row' : r.date === tday ? 'today-row' : null },
-        h('td', {}, `${r.date} (${weekday(r.date)})`), h('td', {}, r.type), h('td', { class: 'note-cell' }, r.tag_id ?? ''), h('td', {}, r.assignee ?? '')))))) : null;
+        h('td', { 'data-label': 'Огноо' }, `${r.date} (${weekday(r.date)})`), h('td', { 'data-label': 'Ажил' }, r.type),
+        h('td', { class: 'note-cell', 'data-label': 'Мал' }, r.tag_id ?? ''), h('td', { 'data-label': 'Хариуцагч' }, r.assignee ?? ''))))))) : null;
 
   fill(main,
     pendingNote,
@@ -1184,11 +1241,22 @@ PAGES.weighings = main => crudSection(main, {
   ]
 });
 
+const FEED_TYPE = 'Тэжээл';
+const FEED_UNITS = ['кг', 'боодол'];
+const qtyUnit = (q, u) => (q == null || q === '' ? '' : FMT.num(q) + (u ? ' ' + u : ''));
+// Тэжээл / нэгж сонгоход нэгж үнийг тохиргооны үнээр (₮/кг, боодол бол × боодлын жин) бөглөнө
+function fillFeedPrice(values, ctrls) {
+  const f = state.lk.suggest.feeds.find(x => x.name === values.feed_name);
+  if (f?.price == null) return;
+  if (values.unit === 'боодол') { if (f.bale_kg) setFormValue(values, ctrls, 'unit_price', f.price * f.bale_kg); }
+  else setFormValue(values, ctrls, 'unit_price', f.price);
+}
 PAGES.expenses = main => crudSection(main, {
   res: 'expenses', module: 'expenses', photos: true, title: 'Зардлын бүртгэл', itemName: 'зардал', addLabel: '+ Зардал нэмэх',
   columns: [
-    { k: 'date', label: 'Огноо' }, { k: 'type', label: 'Төрөл' }, { k: 'description', label: 'Тайлбар' },
-    { k: 'qty', label: 'Тоо', f: 'num' }, { k: 'unit_price', label: 'Нэгж үнэ', f: 'money' },
+    { k: 'date', label: 'Огноо' }, { k: 'type', label: 'Төрөл' }, { k: 'feed_name', label: 'Дэд төрөл' }, { k: 'description', label: 'Тайлбар' },
+    { k: 'qty', label: 'Тоо', f: 'num', render: r => qtyUnit(r.qty, r.unit), csv: r => qtyUnit(r.qty, r.unit) },
+    { k: 'unit_price', label: 'Нэгж үнэ', f: 'money' },
     { k: 'total', label: 'Нийт', f: 'money' }, { k: 'supplier', label: 'Нийлүүлэгч' }
   ],
   totals: ['total'],
@@ -1196,6 +1264,13 @@ PAGES.expenses = main => crudSection(main, {
   fields: [
     { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
     { k: 'type', label: 'Зардлын төрөл', req: true, maxlength: 100, suggest: () => state.lk.suggest.expenseType },
+    // "Тэжээл" төрөлд: дэд төрөл = Тохиргоо → Тэжээл; сонгоход нэгж үнийг тохиргооны үнээр бөглөнө
+    { k: 'feed_name', label: 'Тэжээлийн төрөл *', type: 'select', showIf: v => v.type === FEED_TYPE,
+      options: () => state.lk.suggest.feeds.map(f => [f.name, f.name]),
+      emptyText: () => 'Тохиргоо → Тэжээл хоосон байна',
+      onChange: fillFeedPrice },
+    { k: 'unit', label: 'Нэгж', type: 'select', showIf: v => v.type === FEED_TYPE, def: 'кг',
+      options: () => opt(FEED_UNITS), onChange: fillFeedPrice },
     { k: 'description', label: 'Зардлын тайлбар', full: true },
     { k: 'qty', label: 'Тоо', type: 'number' },
     { k: 'unit_price', label: 'Нэгж үнэ ₮', type: 'number' },
@@ -1527,8 +1602,54 @@ PAGES.market = main => crudSection(main, {
 PAGES.feed = async main => {
   const s = state.lk.settings;
   const planBox = h('div'); const summaryBox = h('div'); const recipeBox = h('div');
-  main.replaceChildren(summaryBox, planBox, recipeBox);
+  const stockBox = h('div'); const usageBox = h('div');
+  main.replaceChildren(stockBox, usageBox, summaryBox, planBox, recipeBox);
   const rerender = async () => { await loadLookups(); await PAGES.feed(main); };
+
+  // Тэжээлийн үлдэгдэл: Зардлын бүртгэлийн "Тэжээл" төрлөөр орж ирсэн − зарцуулалт
+  await crudSection(stockBox, {
+    res: 'feed_stock', title: 'Тэжээлийн үлдэгдэл', readonly: true, rowActions: false, noAdd: true,
+    empty: 'Зардлын бүртгэлд "Тэжээл" төрлийн зардал алга',
+    columns: [
+      { k: 'feed_name', label: 'Тэжээл' }, { k: 'unit', label: 'Нэгж' },
+      { k: 'in_qty', label: 'Орлого', f: 'num' }, { k: 'used_qty', label: 'Зарцуулсан', f: 'num' },
+      { k: 'left_qty', label: 'Үлдэгдэл', f: 'num', render: r => h('b', { class: r.left_qty <= 0 ? 'warn' : '' }, qtyUnit(r.left_qty, r.unit)), csv: r => r.left_qty },
+      { k: 'left_bale', label: 'Үлдэгдэл (боодол)', f: 'num' },
+      { k: 'avg_price', label: 'Дундаж үнэ ₮/нэгж', f: 'money' }, { k: 'left_value', label: 'Үлдэгдлийн өртөг', f: 'money' },
+      { k: 'last_in', label: 'Сүүлд орсон' }, { k: 'last_use', label: 'Сүүлд зарцуулсан' }
+    ],
+    totals: ['left_value']
+  });
+  const stock = await api('GET', '/api/r/feed_stock');
+  const stockOf = name => stock.filter(r => r.feed_name === name);
+  // Зарцуулалтын нэгж: боодлын жин мэдэгдэж байвал кг/боодол аль аль нь, үгүй бол үлдэгдэлтэй нэгжүүд
+  const unitsOf = name => {
+    const rows = stockOf(name);
+    if (rows.some(r => r.bale_kg)) return FEED_UNITS;
+    return rows.filter(r => r.left_qty > 0).map(r => r.unit);
+  };
+  const leftText = name => stockOf(name).map(r => qtyUnit(r.left_qty, r.unit) + (r.left_bale != null ? ` (≈ ${FMT.num(r.left_bale)} боодол)` : '')).join(' · ');
+  await crudSection(usageBox, {
+    res: 'feed_usage', title: 'Тэжээлийн зарцуулалт', itemName: 'зарцуулалт', module: 'feed', addLabel: '+ Зарцуулалт бүртгэх', onChange: rerender,
+    columns: [
+      { k: 'date', label: 'Огноо' }, { k: 'feed_name', label: 'Тэжээл' },
+      { k: 'qty', label: 'Хэмжээ', f: 'num', render: r => qtyUnit(r.qty, r.unit), csv: r => qtyUnit(r.qty, r.unit) },
+      { k: 'cost', label: 'Өртөг', f: 'money' }, { k: 'note', label: 'Тэмдэглэл' }
+    ],
+    totals: ['cost'],
+    filters: [{ k: 'feed_name', label: 'Тэжээл', options: rows => uniq(rows, 'feed_name') }, { k: 'unit', label: 'Нэгж', options: FEED_UNITS }],
+    fields: [
+      { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
+      { k: 'feed_name', label: 'Тэжээл', type: 'select', req: true,
+        options: () => [...new Set(stock.filter(r => r.left_qty > 0).map(r => r.feed_name))].map(n => [n, n]),
+        emptyText: () => 'Үлдэгдэлтэй тэжээл алга',
+        onChange: (values, ctrls) => setFormValue(values, ctrls, 'unit', unitsOf(values.feed_name)[0] || '') },
+      { k: 'left', label: 'Үлдэгдэл', type: 'info', compute: v => (v.feed_name ? leftText(v.feed_name) || '0' : null) },
+      { k: 'unit', label: 'Нэгж', type: 'select', req: true, dependsOn: 'feed_name', options: v => opt(unitsOf(v.feed_name)) },
+      { k: 'qty', label: 'Хэмжээ', type: 'number', req: true },
+      { k: 'note', label: 'Тэмдэглэл', full: true }
+    ]
+  });
   await crudSection(planBox, {
     res: 'feed_plan', title: `Тэжээлийн төлөвлөгөө (1 толгой, ${s.plan_days} хоног)`, itemName: 'тэжээл', module: 'feed', rowActions: true, onChange: rerender,
     columns: [
@@ -1614,8 +1735,9 @@ const SETTING_TABS = [
       { k: 'needs_animals', label: 'Мал сонгох', type: 'select', req: true, options: () => [[1, 'Тийм'], [0, 'Үгүй']], def: 0 }] }) },
   { id: 'feeds', label: 'Тэжээл', cfg: () => ({
     res: 'feeds', title: 'Тэжээл ба үнэ', itemName: 'тэжээл', write: 'admin', rowActions: true,
-    columns: [{ k: 'name', label: 'Тэжээл' }, { k: 'price', label: 'Үнэ ₮/кг', f: 'money' }],
-    fields: [{ k: 'name', label: 'Тэжээл', req: true }, { k: 'price', label: 'Үнэ ₮/кг', type: 'number' }] }) },
+    columns: [{ k: 'name', label: 'Тэжээл' }, { k: 'price', label: 'Үнэ ₮/кг', f: 'money' }, { k: 'bale_kg', label: '1 боодлын жин', f: 'kg' }],
+    fields: [{ k: 'name', label: 'Тэжээл', req: true }, { k: 'price', label: 'Үнэ ₮/кг', type: 'number' },
+      { k: 'bale_kg', label: '1 боодлын жин (кг)', type: 'number' }] }) },
   { id: 'expense_types', label: 'Зардлын төрөл', cfg: () => ({
     res: 'expense_types', title: 'Зардлын төрөл', itemName: 'зардлын төрөл', write: 'admin', rowActions: true,
     columns: [{ k: 'name', label: 'Зардлын төрөл' }],

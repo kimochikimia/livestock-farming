@@ -142,6 +142,10 @@ input:disabled, select:disabled { opacity: .6; }
 .help { color: var(--muted); font-size: 12px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .form-grid .full { grid-column: 1 / -1; }
+.form-grid > * { min-width: 0; }
+/* iPhone Safari: огнооны талбар өөрийн өргөнөөр халихгүй, бусад талбартай ижил харагдана */
+input[type="date"], input[type="month"], input[type="time"] { -webkit-appearance: none; appearance: none; display: block; max-width: 100%; min-height: 38px; text-align: left; }
+input::-webkit-date-and-time-value { text-align: left; }
 .form-msg:empty { display: none; }
 .form-msg { padding: 9px 12px; border-radius: 8px; margin: 4px 0 12px; font-size: 13px; }
 .form-msg.err { background: var(--danger-soft); color: var(--danger); }
@@ -197,8 +201,8 @@ dialog.modal::backdrop { background: rgba(10, 20, 12, .45); }
 
 /* ---------- Mobile ---------- */
 @media (max-width: 900px) {
-  .sidebar { position: fixed; left: 0; top: 0; z-index: 50; transform: translateX(-100%); transition: transform .2s; box-shadow: 0 0 40px rgba(0,0,0,.2); }
-  body.nav-open .sidebar { transform: none; }
+  .sidebar { position: fixed; left: 0; top: 0; z-index: 50; transform: translateX(-100%); transition: transform .2s; box-shadow: none; }
+  body.nav-open .sidebar { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.2); }
   body.nav-open::after { content: ''; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 40; }
   .menu-btn { display: inline-block; }
   .topbar { padding: 14px 16px 4px; }
@@ -350,14 +354,23 @@ tr.owner-row td { background: var(--surface-2); }
 .found-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-weight: 700; flex: none; }
 
 /* ---------- Бүх сонгох жагсаалт ижил харагдана (select ба санал болгох жагсаалттай талбар) ---------- */
-select, input[list] {
+select, input.combo-input {
   -webkit-appearance: none; appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2366736a' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 8px;
   padding-right: 34px;
 }
-input[list]::-webkit-calendar-picker-indicator { display: none !important; }
 select::-ms-expand { display: none; }
+/* Санал болгох жагсаалт — талбарын доор, аппын өнгөөр */
+.combo-list {
+  position: fixed; z-index: 1000; margin: 0; padding: 4px; list-style: none; overflow-y: auto;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .16); overscroll-behavior: contain;
+}
+.combo-list li { padding: 8px 10px; border-radius: 7px; cursor: pointer; font-size: 14px; line-height: 1.3; }
+.combo-list li:hover, .combo-list li.active { background: var(--brand-soft); color: var(--brand); }
+.combo-list li.selected { font-weight: 700; }
+@media (max-width: 900px) { .combo-list li { padding: 11px 12px; font-size: 16px; } }
 
 .sched-info { margin-bottom: 14px; }
 
@@ -549,6 +562,8 @@ dialog.modal { overflow-y: auto; overscroll-behavior: contain; }
 @media (max-width: 900px) {
   /* iPhone: 16px-ээс жижиг талбар дээр дарахад дэлгэц томордог — 16px болгоно */
   input, select, textarea { font-size: 16px; }
+  /* 16px текст 34px өндөрт багтахгүй тасардаг — хайлт, шүүлтүүрийг өндөрсгөнө */
+  .search, .filter { height: 40px; padding-top: 0; padding-bottom: 0; }
   /* Хуруугаар дарахад хангалттай том товч */
   .btn { min-height: 40px; }
   .btn.small { min-height: 36px; }
@@ -593,8 +608,8 @@ dialog.modal { overflow-y: auto; overscroll-behavior: contain; }
   table.data:not(.compact) td::before { content: attr(data-label); color: var(--muted); font-weight: 600; font-size: 12px; text-align: left; flex: none; max-width: 48%; }
   table.data:not(.compact) td:not([data-label])::before, table.data:not(.compact) td[data-label=""]::before { content: none; }
   table.data:not(.compact) td:empty { display: none; }
-  table.data:not(.compact) td.row-actions, table.data:not(.compact) td.approve-cell { justify-content: flex-end; flex-wrap: wrap; gap: 6px; padding-top: 10px; }
-  table.data:not(.compact) td.row-actions .btn { flex: 1 1 auto; }
+  table.data:not(.compact) td.row-actions, table.data:not(.compact) td.approve-cell { justify-content: flex-end; flex-wrap: wrap; gap: 6px; padding-top: 10px; width: auto; }
+  table.data:not(.compact) td.row-actions .btn { flex: 1 1 auto; margin-left: 0; }
   table.data:not(.compact) td.empty { justify-content: center; border: none !important; color: var(--muted); }
   table.data:not(.compact) td.note-cell { max-width: none; }
   table.data:not(.compact) tfoot tr { background: var(--surface-2); }

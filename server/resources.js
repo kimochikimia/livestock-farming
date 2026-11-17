@@ -141,6 +141,40 @@ async function checkSlaughter(v, db, farmId) {
   if (v.shipped_date && v.shipped_date < v.date) throw new HttpError(400, `${a.tag_id}: ачигдсан огноо (${v.shipped_date}) бойлох өдрөөс (${v.date}) өмнө байж болохгүй`);
 }
 
+// ---------- Тэжээлийн нөөц: "Тэжээл" төрлийн зардал = орлого, feed_usage = зарцуулалт ----------
+const FEED_TYPE = 'Тэжээл';
+const FEED_UNITS = ['кг', 'боодол'];
+const fmtQ = n => Math.round(n * 100) / 100;
+// Тэжээлийн нөөцийг нэгжээр (bucket) бүлэглэнэ. Тохиргоонд "1 боодлын жин" байвал бүгдийг кг руу хөрвүүлж
+// нэг үлдэгдлээр, байхгүй бол кг ба боодлыг тусад нь хянана. Засварлаж буй бичлэгийг тооцоонд оруулахгүй.
+async function feedBuckets(db, farmId, name, { expenseId = 0, usageId = 0, baleKg } = {}) {
+  const bk = baleKg !== undefined ? baleKg
+    : (await db.one('SELECT bale_kg FROM feeds WHERE farm_id = ? AND name = ?', [farmId, name]))?.bale_kg || null;
+  const toBucket = (u, q) => (bk ? ['кг', u === 'боодол' ? q * bk : q] : [u || 'кг', q]);
+  const inc = await db.q(`SELECT COALESCE(unit, 'кг') u, SUM(COALESCE(qty, 0)) q, SUM(COALESCE(qty, 0) * COALESCE(unit_price, 0)) cost, MAX(date) d
+    FROM expenses WHERE farm_id = ? AND type = ? AND feed_name = ? AND id <> ? GROUP BY u`, [farmId, FEED_TYPE, name, expenseId || 0]);
+  const use = await db.q('SELECT unit u, SUM(qty) q, MAX(date) d FROM feed_usage WHERE farm_id = ? AND feed_name = ? AND id <> ? GROUP BY u',
+    [farmId, name, usageId || 0]);
+  const buckets = new Map();
+  const get = k => buckets.get(k) || buckets.set(k, { in: 0, cost: 0, used: 0, last_in: null, last_use: null }).get(k);
+  for (const r of inc) {
+    const [k, q] = toBucket(r.u, n0(r.q)); const x = get(k);
+    x.in += q; x.cost += n0(r.cost); if (!x.last_in || r.d > x.last_in) x.last_in = r.d;
+  }
+  for (const r of use) {
+    const [k, q] = toBucket(r.u, n0(r.q)); const x = get(k);
+    x.used += q; if (!x.last_use || r.d > x.last_use) x.last_use = r.d;
+  }
+  return { bk, buckets, toBucket };
+}
+// Аль ч нэгжийн үлдэгдэл хасах руу орвол алдаа
+function assertFeedBalance(name, buckets, msg) {
+  for (const [k, x] of buckets) {
+    const left = x.in - x.used;
+    if (left < -1e-9) throw new HttpError(400, `${name}: ${msg} (${fmtQ(-left)} ${k} дутна)`);
+  }
+}
+
 const resources = {
   animals: {
     table: 'animals', title: 'Мал', track: true, photos: true, describe: v => v.tag_id,
@@ -235,16 +269,112 @@ const resources = {
   },
 
   expenses: {
-    table: 'expenses', title: 'Зардал', track: true, photos: true, describe: v => v.type,
+    table: 'expenses', title: 'Зардал', track: true, photos: true, describe: v => (v.feed_name ? `${v.type} · ${v.feed_name}` : v.type),
     fields: {
       date: { t: 'date', req: true, label: 'Огноо' },
       type: { t: 'text', req: true, max: 100, label: 'Төрөл' },
+      feed_name: { t: 'text', max: 100, label: 'Тэжээл' },
+      unit: { t: 'text', options: FEED_UNITS, label: 'Нэгж' },
       description: { t: 'text', max: 500, label: 'Тайлбар' },
       qty: { t: 'num', label: 'Тоо' },
       unit_price: { t: 'num', label: 'Нэгж үнэ' },
       supplier: { t: 'text', max: 200, label: 'Нийлүүлэгч' }
     },
+    // "Тэжээл" төрөл → дэд төрөл нь Тохиргоо → Тэжээл-ийн нэр, хэмжээ (кг) заавал; бусад төрөлд дэд төрөлгүй.
+    // Засварлахад тэжээлийн үлдэгдэл хасах руу орохгүй байхыг шалгана.
+    async prepare(v, db, farmId, id) {
+      if (v.type !== FEED_TYPE) { v.feed_name = null; v.unit = null; }
+      else {
+        if (!v.feed_name) throw new HttpError(400, 'Тэжээлийн төрлийг сонгоно уу');
+        const f = await db.one('SELECT name FROM feeds WHERE farm_id = ? AND name = ?', [farmId, v.feed_name]);
+        if (!f) throw new HttpError(400, `"${v.feed_name}" тэжээл Тохиргоо → Тэжээл-д бүртгэлгүй байна`);
+        v.feed_name = f.name;
+        v.unit = v.unit || 'кг';
+        if (!(v.qty > 0)) throw new HttpError(400, `Тэжээлийн хэмжээг (${v.unit}) оруулна уу`);
+      }
+      if (!id) return;
+      const old = await db.one('SELECT type, feed_name FROM expenses WHERE id = ? AND farm_id = ?', [id, farmId]);
+      if (old?.type === FEED_TYPE && old.feed_name) {
+        const { buckets, toBucket } = await feedBuckets(db, farmId, old.feed_name, { expenseId: id });
+        if (v.type === FEED_TYPE && v.feed_name === old.feed_name) {
+          const [k, q] = toBucket(v.unit, v.qty);
+          const x = buckets.get(k); if (x) x.in += q;
+        }
+        assertFeedBalance(old.feed_name, buckets, 'зарцуулсан хэмжээ орлогоос их болно');
+      }
+    },
+    async beforeDelete(old, db, farmId) {
+      if (old.type !== FEED_TYPE || !old.feed_name) return;
+      const { buckets } = await feedBuckets(db, farmId, old.feed_name, { expenseId: old.id });
+      assertFeedBalance(old.feed_name, buckets, 'энэ орлогыг устгавал зарцуулалт орлогоос их болно');
+    },
     list: async (db, farmId) => (await db.q('SELECT *, COALESCE(qty, 0) * COALESCE(unit_price, 0) AS total FROM expenses WHERE farm_id = ? ORDER BY date DESC, id DESC', [farmId]))
+  },
+
+  // Тэжээлийн зарцуулалт — зардлаар орж ирсэн тэжээлээс хасагдана
+  feed_usage: {
+    table: 'feed_usage', title: 'Тэжээлийн зарцуулалт', track: true, describe: v => `${v.feed_name} ${v.qty} ${v.unit}`,
+    fields: {
+      date: { t: 'date', req: true, label: 'Огноо' },
+      feed_name: { t: 'text', req: true, max: 100, label: 'Тэжээл' },
+      unit: { t: 'text', req: true, options: FEED_UNITS, label: 'Нэгж' },
+      qty: { t: 'num', req: true, label: 'Хэмжээ' },
+      note: { t: 'text', max: 500, label: 'Тэмдэглэл' }
+    },
+    async prepare(v, db, farmId, id) {
+      if (!(v.qty > 0)) throw new HttpError(400, '"Хэмжээ" 0-ээс их байх ёстой');
+      const f = await db.one('SELECT feed_name FROM expenses WHERE farm_id = ? AND type = ? AND feed_name = ? LIMIT 1', [farmId, FEED_TYPE, v.feed_name]);
+      if (!f) throw new HttpError(400, `"${v.feed_name}" тэжээлийн орлого (зардал) бүртгэгдээгүй байна`);
+      v.feed_name = f.feed_name;
+      const { bk, buckets, toBucket } = await feedBuckets(db, farmId, v.feed_name, { usageId: id });
+      const [k, q] = toBucket(v.unit, v.qty);
+      const x = buckets.get(k);
+      const left = x ? x.in - x.used : 0;
+      if (q > left + 1e-9) {
+        const alt = bk ? ` (≈ ${fmtQ(Math.max(0, left) / bk)} боодол)` : '';
+        throw new HttpError(400, `${v.feed_name}: үлдэгдэл ${fmtQ(Math.max(0, left))} ${k}${alt} байна`);
+      }
+    },
+    // Өртөг = зарцуулсан хэмжээ × тухайн нэгжийн жигнэсэн дундаж үнэ
+    async list(db, farmId) {
+      const rows = await db.q('SELECT * FROM feed_usage WHERE farm_id = ? ORDER BY date DESC, id DESC', [farmId]);
+      const cache = new Map();
+      for (const name of new Set(rows.map(r => r.feed_name))) cache.set(name, await feedBuckets(db, farmId, name));
+      return rows.map(r => {
+        const { buckets, toBucket } = cache.get(r.feed_name);
+        const [k, q] = toBucket(r.unit, r.qty);
+        const x = buckets.get(k);
+        return { ...r, cost: x && x.in > 0 ? q * x.cost / x.in : null };
+      });
+    }
+  },
+
+  // Тэжээлийн үлдэгдэл (зөвхөн харах): орлого − зарцуулалт
+  feed_stock: {
+    table: 'feed_usage', title: 'Тэжээлийн үлдэгдэл', readonly: true,
+    // Тэжээл × нэгж тус бүр нэг мөр; боодлын жин мэдэгдэж байвал кг-аар нэг мөр + боодлоор шилжүүлсэн үлдэгдэл
+    async list(db, farmId) {
+      const used = (await db.q(`SELECT DISTINCT feed_name n FROM expenses WHERE farm_id = ? AND type = ? AND feed_name IS NOT NULL
+        UNION SELECT DISTINCT feed_name FROM feed_usage WHERE farm_id = ?`, [farmId, FEED_TYPE, farmId])).map(r => r.n);
+      const order = (await db.q('SELECT name FROM feeds WHERE farm_id = ? ORDER BY id', [farmId])).map(r => r.name);
+      const names = [...new Set([...order.filter(n => used.includes(n)), ...used])];
+      const out = [];
+      for (const name of names) {
+        const { bk, buckets } = await feedBuckets(db, farmId, name);
+        for (const unit of FEED_UNITS) {
+          const x = buckets.get(unit);
+          if (!x) continue;
+          const left = x.in - x.used;
+          const avg_price = x.in > 0 ? x.cost / x.in : null;
+          out.push({
+            id: out.length + 1, feed_name: name, unit, bale_kg: bk, in_qty: x.in, used_qty: x.used, left_qty: left,
+            left_bale: bk ? left / bk : null, avg_price, left_value: avg_price != null ? left * avg_price : null,
+            last_in: x.last_in, last_use: x.last_use
+          });
+        }
+      }
+      return out;
+    }
   },
 
   slaughters: {
@@ -384,7 +514,31 @@ const resources = {
     table: 'feeds', title: 'Тэжээл', settings: true, describe: v => v.name,
     fields: {
       name: { t: 'text', req: true, max: 100, label: 'Тэжээл' },
-      price: { t: 'num', label: 'Үнэ ₮/кг' }
+      price: { t: 'num', label: 'Үнэ ₮/кг' },
+      bale_kg: { t: 'num', max: 10000, label: '1 боодлын жин (кг)' }
+    },
+    // Боодлын жинг өөрчлөхөд үлдэгдэл хасах руу орохгүйг шалгана;
+    // нэрийг солиход зардал, зарцуулалтын бүртгэл дэх нэрийг хамт шинэчилнэ
+    async prepare(v, db, farmId, id) {
+      if (!v.bale_kg) v.bale_kg = null;
+      if (!id) return;
+      const old = await db.one('SELECT name, bale_kg FROM feeds WHERE id = ? AND farm_id = ?', [id, farmId]);
+      if (!old) return;
+      if ((old.bale_kg || null) !== v.bale_kg) {
+        const { buckets } = await feedBuckets(db, farmId, old.name, { baleKg: v.bale_kg });
+        assertFeedBalance(old.name, buckets, 'боодлын жинг ингэж өөрчилвөл зарцуулалт орлогоос их болно');
+      }
+      if (old.name === v.name) return;
+      if (await db.one('SELECT 1 x FROM feeds WHERE farm_id = ? AND name = ? AND id <> ?', [farmId, v.name, id])) {
+        throw new HttpError(409, `"${v.name}" тэжээл аль хэдийн бүртгэгдсэн байна`);
+      }
+      await db.run('UPDATE expenses SET feed_name = ? WHERE farm_id = ? AND feed_name = ?', [v.name, farmId, old.name]);
+      await db.run('UPDATE feed_usage SET feed_name = ? WHERE farm_id = ? AND feed_name = ?', [v.name, farmId, old.name]);
+    },
+    async beforeDelete(old, db, farmId) {
+      const used = await db.one('SELECT 1 x FROM expenses WHERE farm_id = ? AND feed_name = ? UNION SELECT 1 FROM feed_usage WHERE farm_id = ? AND feed_name = ? LIMIT 1',
+        [farmId, old.name, farmId, old.name]);
+      if (used) throw new HttpError(409, `"${old.name}" тэжээлээр зардал/зарцуулалт бүртгэгдсэн тул устгах боломжгүй`);
     }
   },
   expense_types: {
@@ -444,6 +598,8 @@ const RESOURCE_MODULES = {
   market_prices: ['market'],
   feed_plan: ['feed'],
   feed_recipes: ['feed'],
+  feed_usage: ['feed'],
+  feed_stock: ['feed', ['feed', 'expenses']],
   tasks: ['tasks']
 };
 for (const [k, [mod, readers]] of Object.entries(RESOURCE_MODULES)) {
@@ -460,4 +616,4 @@ function mapDbError(err) {
   return null;
 }
 
-module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES };
+module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE };

@@ -8,7 +8,7 @@ const cookieParser = require('cookie-parser');
 const { rateLimit } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const { db, init, audit, getSettings, setSetting, SETTING_KEYS, ensureAdmin, UPLOAD_DIR, copyFarmSettings } = require('./db');
-const { resources, validate, HttpError, mapDbError, SPECIES, SEXES } = require('./resources');
+const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE } = require('./resources');
 const { applyTemplate } = require('./template');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -493,7 +493,9 @@ app.get('/api/lookups', async (req, res) => {
     classes: await db.q('SELECT species, age_name, age, sex, target_weight FROM animal_classes WHERE farm_id = ? ORDER BY id', [fid]),
     // Гараар бичих талбаруудад санал болгох утгууд (зөвхөн тухайн фермийнх)
     suggest: {
-      expenseType: await col('SELECT name AS v FROM expense_types WHERE farm_id = ? UNION SELECT DISTINCT type FROM expenses WHERE farm_id = ? ORDER BY 1', [fid, fid]),
+      expenseType: [...new Set([FEED_TYPE, ...await col('SELECT name AS v FROM expense_types WHERE farm_id = ? UNION SELECT DISTINCT type FROM expenses WHERE farm_id = ? ORDER BY 1', [fid, fid])])],
+      // Зардлын "Тэжээл" төрлийн дэд төрөл (Тохиргоо → Тэжээл)
+      feeds: await db.q('SELECT name, price, bale_kg FROM feeds WHERE farm_id = ? ORDER BY id', [fid]),
       ageName: await col('SELECT age_name AS v FROM animal_classes WHERE farm_id = ? UNION SELECT DISTINCT age_name FROM animals WHERE farm_id = ? AND age_name IS NOT NULL ORDER BY 1', [fid, fid]),
       age: await col('SELECT age AS v FROM animal_classes WHERE farm_id = ? UNION SELECT DISTINCT age FROM animals WHERE farm_id = ? AND age IS NOT NULL ORDER BY 1', [fid, fid]),
       tagColor: await col('SELECT name AS v FROM tag_colors WHERE farm_id = ? ORDER BY id', [fid]),
@@ -586,9 +588,9 @@ app.get('/api/dashboard', async (req, res) => {
 });
 
 // ---------- Ерөнхий CRUD (сонгосон ферм дотор) ----------
-function getRes(name) {
+function getRes(name, write) {
   const r = Object.hasOwn(resources, name) ? resources[name] : null;
-  if (!r) throw new HttpError(404, 'Олдсонгүй');
+  if (!r || (write && r.readonly)) throw new HttpError(404, 'Олдсонгүй');
   return r;
 }
 const idParam = req => {
@@ -615,7 +617,7 @@ app.get('/api/r/:res', async (req, res) => {
 });
 
 app.post('/api/r/:res', async (req, res) => {
-  const r = getRes(req.params.res);
+  const r = getRes(req.params.res, true);
   requirePerm(req, r.module, r.settings ? 3 : 2);
   const v = validate(r.fields, req.body || {});
   const desc = describe(r, v);
@@ -635,7 +637,7 @@ app.post('/api/r/:res', async (req, res) => {
 });
 
 app.put('/api/r/:res/:id', async (req, res) => {
-  const r = getRes(req.params.res);
+  const r = getRes(req.params.res, true);
   requirePerm(req, r.module, r.settings ? 3 : 2);
   const id = idParam(req);
   const v = validate(r.fields, req.body || {});
@@ -654,12 +656,13 @@ function removePhotoFiles(rows) {
 }
 
 app.delete('/api/r/:res/:id', async (req, res) => {
-  const r = getRes(req.params.res);
+  const r = getRes(req.params.res, true);
   requirePerm(req, r.module, 3);
   const id = idParam(req);
   const fid = req.farm.id;
   const old = (await listRows(r, fid)).find(x => x.id === id);
   if (!old) throw new HttpError(404, 'Бичлэг олдсонгүй');
+  if (r.beforeDelete) await r.beforeDelete(old, db, fid);
   // Холбоотой зургуудыг (малыг устгавал түүний жинлэлт, бойн зургийг ч) хамт устгана
   const linked = [[r.table, [id]]];
   if (r.table === 'animals') {
