@@ -1619,7 +1619,7 @@ PAGES.feed = async main => {
 
   // Тэжээлийн үлдэгдэл: Зардлын бүртгэлийн "Тэжээл" төрлөөр орж ирсэн − зарцуулалт
   await crudSection(stockBox, {
-    res: 'feed_stock', title: 'Тэжээлийн үлдэгдэл', readonly: true, rowActions: false, noAdd: true,
+    res: 'feed_stock', title: 'Тэжээлийн бүртгэлийн жагсаалт', readonly: true, rowActions: false, noAdd: true,
     empty: 'Зардлын бүртгэлд "Тэжээл" төрлийн зардал алга',
     columns: [
       { k: 'feed_name', label: 'Тэжээл' }, { k: 'unit', label: 'Нэгж' },
