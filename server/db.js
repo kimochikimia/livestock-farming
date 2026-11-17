@@ -224,6 +224,12 @@ async function init() {
   await ensureColumn('sales', 'animal_id', 'INT NULL');
   await ensureColumn('sales', 'amount', 'DOUBLE NULL');
   // Бой: бойнд орох (төлөвлөсөн) огноо ба бойнд орсон (бодит) огноо. date = бодит || төлөвлөсөн
+  // Зардал: өөр зардалтай холбох (тэжээлийн тээвэр → тэжээл, малын тээвэр → "Мал авсан"): "16" эсвэл "animal-33"
+  await ensureColumn('expenses', 'related_ref', 'VARCHAR(40) NULL');
+  // Хөрөнгө оруулагч = вэбд бүртгэлтэй хэрэглэгч (утасны дугаараар холбоно)
+  await ensureColumn('partners', 'user_id', 'INT NULL');
+  // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
+  await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   await ensureColumn('slaughters', 'planned_date', 'DATE NULL');
   await ensureColumn('slaughters', 'slaughtered_date', 'DATE NULL');
   await pool.query('UPDATE slaughters SET planned_date = date WHERE planned_date IS NULL');

@@ -336,7 +336,8 @@ const resources = {
       description: { t: 'text', max: 500, label: 'Тайлбар' },
       qty: { t: 'num', label: 'Тоо' },
       unit_price: { t: 'num', label: 'Нэгж үнэ' },
-      supplier: { t: 'text', max: 200, label: 'Нийлүүлэгч' }
+      supplier: { t: 'text', max: 200, label: 'Нийлүүлэгч' },
+      related_ref: { t: 'text', max: 40, label: 'Холбогдох зардал' }
     },
     // "Тэжээл" төрөл → дэд төрөл нь Тохиргоо → Тэжээл-ийн нэр, хэмжээ (кг) заавал; бусад төрөлд дэд төрөлгүй.
     // Засварлахад тэжээлийн үлдэгдэл хасах руу орохгүй байхыг шалгана.
@@ -350,6 +351,23 @@ const resources = {
         v.unit = v.unit || 'кг';
         if (!(v.qty > 0)) throw new HttpError(400, `Тэжээлийн хэмжээг (${v.unit}) оруулна уу`);
       }
+      // Холбогдох зардал: "16" (гараар бүртгэсэн, холбоосгүй үндсэн зардал) эсвэл "animal-33" (Мал авсан)
+      if (v.related_ref) {
+        const ref = v.related_ref;
+        if (/^\d+$/.test(ref)) {
+          if (id && Number(ref) === Number(id)) throw new HttpError(400, 'Зардлыг өөрт нь холбох боломжгүй');
+          const rel = await db.one('SELECT id, related_ref FROM expenses WHERE id = ? AND farm_id = ?', [Number(ref), farmId]);
+          if (!rel) throw new HttpError(400, 'Холбогдох зардал олдсонгүй');
+          if (rel.related_ref) throw new HttpError(400, 'Сонгосон зардал өөрөө өөр зардалд холбогдсон байна — үндсэн зардлыг сонгоно уу');
+        } else if (/^animal-\d+$/.test(ref)) {
+          if (!await db.one("SELECT 1 x FROM animals WHERE id = ? AND farm_id = ? AND source = 'Худалдаж авсан'", [Number(ref.slice(7)), farmId])) {
+            throw new HttpError(400, 'Холбогдох "Мал авсан" зардал олдсонгүй');
+          }
+        } else throw new HttpError(400, 'Холбогдох зардал буруу байна');
+        if (id && await db.one('SELECT 1 x FROM expenses WHERE farm_id = ? AND related_ref = ? LIMIT 1', [farmId, String(id)])) {
+          throw new HttpError(400, 'Энэ зардалд өөр зардлууд холбогдсон тул түүнийг өөр зардалд холбох боломжгүй');
+        }
+      }
       if (!id) return;
       const old = await db.one('SELECT type, feed_name FROM expenses WHERE id = ? AND farm_id = ?', [id, farmId]);
       if (old?.type === FEED_TYPE && old.feed_name) {
@@ -362,14 +380,28 @@ const resources = {
       }
     },
     async beforeDelete(old, db, farmId) {
-      if (old.type !== FEED_TYPE || !old.feed_name) return;
-      const { buckets } = await feedBuckets(db, farmId, old.feed_name, { expenseId: old.id });
-      assertFeedBalance(old.feed_name, buckets, 'энэ орлогыг устгавал зарцуулалт орлогоос их болно');
+      if (old.type === FEED_TYPE && old.feed_name) {
+        const { buckets } = await feedBuckets(db, farmId, old.feed_name, { expenseId: old.id });
+        assertFeedBalance(old.feed_name, buckets, 'энэ орлогыг устгавал зарцуулалт орлогоос их болно');
+      }
+      // Холбогдсон зардлууд (тээвэр г.м.) үлдэнэ, зөвхөн холбоос нь арилна
+      await db.run('UPDATE expenses SET related_ref = NULL WHERE farm_id = ? AND related_ref = ?', [farmId, String(old.id)]);
     },
-    // Гараар бүртгэсэн зардал + малын бүртгэлээс автоматаар орох "Мал авсан" зардал (зөвхөн харах)
+    // Гараар бүртгэсэн зардал + малын бүртгэлээс автоматаар орох "Мал авсан" зардал (зөвхөн харах).
+    // related_label — холбогдсон үндсэн зардал; linked_total — энэ зардалд холбогдсон нэмэлт зардлын нийлбэр
     async list(db, farmId) {
       const own = await db.q('SELECT *, COALESCE(qty, 0) * COALESCE(unit_price, 0) AS total FROM expenses WHERE farm_id = ? ORDER BY date DESC, id DESC', [farmId]);
-      return [...own, ...await animalPurchaseExpenses(db, farmId)].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+      const all = [...own, ...await animalPurchaseExpenses(db, farmId)];
+      const byRef = new Map(all.map(e => [String(e.id), e]));
+      for (const e of own) {
+        const p = e.related_ref ? byRef.get(e.related_ref) : null;
+        if (p) {
+          e.related_label = [p.date, p.type, p.feed_name, p.description, p.supplier].filter(Boolean).join(' · ');
+          p.linked_total = (p.linked_total || 0) + (Number(e.total) || 0);
+          p.linked_count = (p.linked_count || 0) + 1;
+        }
+      }
+      return all.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
     }
   },
 
@@ -688,8 +720,8 @@ const resources = {
   partners: {
     table: 'partners', title: 'Хөрөнгө оруулагч', settings: true, describe: v => `${v.name} ${v.percent}%`,
     fields: {
-      name: { t: 'text', req: true, max: 100, label: 'Нэр' },
-      phone: { t: 'text', max: 20, label: 'Утас' },
+      name: { t: 'text', max: 100, label: 'Нэр' },
+      phone: { t: 'text', req: true, max: 20, label: 'Утас' },
       invested: { t: 'num', label: 'Оруулсан хөрөнгө' },
       percent: { t: 'num', req: true, max: 100, label: 'Ашгийн хувь (%)' },
       payout_period: { t: 'text', options: PAYOUT_PERIODS, label: 'Олгох давтамж' },
@@ -699,6 +731,14 @@ const resources = {
     },
     // Нийт ашгийн хувь 100%-иас хэтрэхгүй; дуусах огноо эхлэхээс өмнө байж болохгүй
     async prepare(v, db, farmId, id) {
+      // Хөрөнгө оруулагч вэбд бүртгүүлсэн (баталгаажсан) хэрэглэгч байх ёстой — нэрийг бүртгэлээс авна
+      const phone = String(v.phone || '').replace(/\D/g, '').replace(/^976(?=\d{8}$)/, '');
+      const u = /^\d{8}$/.test(phone) ? await db.one("SELECT id, name, phone FROM users WHERE phone = ? AND status = 'approved'", [phone]) : null;
+      if (!u) throw new HttpError(400, `${v.phone} дугаараар бүртгүүлсэн (баталгаажсан) хэрэглэгч олдсонгүй. Хөрөнгө оруулагч эхлээд энэ вэбд бүртгүүлсэн байх ёстой`);
+      if (await db.one('SELECT 1 x FROM partners WHERE farm_id = ? AND user_id = ? AND id <> ?', [farmId, u.id, id || 0])) {
+        throw new HttpError(409, `${u.name} энэ фермийн хөрөнгө оруулагчаар аль хэдийн бүртгэгдсэн байна`);
+      }
+      v.user_id = u.id; v.name = u.name; v.phone = u.phone;
       if (v.start_date && v.end_date && v.end_date < v.start_date) throw new HttpError(400, 'Дуусах огноо эхлэх огнооноос өмнө байж болохгүй');
       const { s } = await db.one('SELECT COALESCE(SUM(percent), 0) s FROM partners WHERE farm_id = ? AND id <> ?', [farmId, id || 0]);
       if (s + v.percent > 100 + 1e-9) throw new HttpError(400, `Нийт ашгийн хувь 100%-иас хэтэрнэ (бусад: ${s}%, энэ: ${v.percent}%)`);

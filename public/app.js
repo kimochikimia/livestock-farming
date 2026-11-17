@@ -157,7 +157,7 @@ document.addEventListener('click', e => {
   if (document.body.classList.contains('nav-open') && !e.target.closest('.sidebar, .menu-btn')) document.body.classList.remove('nav-open');
 });
 
-async function loadLookups() { state.lk = await api('GET', '/api/lookups'); }
+async function loadLookups() { state.lk = await api('GET', '/api/lookups'); try { applyFarmColor(); } catch { /* */ } }
 
 async function render() {
   const root = document.getElementById('app');
@@ -196,7 +196,7 @@ async function render() {
 function sidebar(path) {
   const farm = state.lk?.farm;
   return h('aside', { class: 'sidebar' },
-    farm ? h('a', { class: 'farm-switch', href: '#/farms', title: 'Ферм солих' },
+    farm ? h('a', { class: 'farm-switch', href: '#/farms', title: 'Ферм солих', style: `--fc:${farmColor(farm)}` },
       h('span', { class: 'farm-switch-label' }, 'Ферм'),
       h('strong', {}, farm.name),
       !farm.mine && farm.owner_name ? h('span', { class: 'muted small' }, farm.owner_name) : null,
@@ -472,7 +472,7 @@ async function crudSection(container, cfg) {
   // Өөр бүртгэлээс автоматаар орсон мөр (r.auto) энд засагдахгүй — эх бүртгэл рүү очих товч (cfg.autoAction)
   // cfg.autoOpen(r, refresh): автомат мөр дээр дарахад (жишээ нь ачилт → борлуулалтын маягт) нээх үйлдэл
   const autoOpen = r => (canWrite && cfg.autoOpen ? () => cfg.autoOpen(r, refresh, canDel) : null);
-  const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r, autoOpen(r))) : h('td', { class: 'row-actions' },
+  const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r, autoOpen(r), refresh)) : h('td', { class: 'row-actions' },
     cfg.extraAction?.(r, refresh) ?? null,
     h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel); } }, 'Засах'),
     canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeRow(r); } }, 'Устгах') : null));
@@ -634,6 +634,10 @@ function combo(input, getItems) {
 }
 
 // init — шинэ бичлэгийн урьдчилан бөглөх утгууд (def-ээс давуу)
+// Засвар хадгалах анхааруулга: өөрчлөгдсөн зүйлсийг жагсааж асууна
+const confirmSave = (changes = []) =>
+  confirm(['Өөрчлөлтийг хадгалах уу?', ...(changes.length ? ['', ...changes] : [])].join('\n'));
+
 function openForm(cfg, row, onDone, canDel, init) {
   const isEdit = !!row;
   if (isEdit && cfg.fields.some(f => f.createOnly)) cfg = { ...cfg, fields: cfg.fields.filter(f => !f.createOnly) };
@@ -756,6 +760,20 @@ function openForm(cfg, row, onDone, canDel, init) {
     for (const f of inputs) values[f.k] = ctrls[f.k].value;
     const body = {};
     for (const f of inputs) if (!f.virtual) body[f.k] = values[f.k] === '' || (f.showIf && !f.showIf(values)) ? null : values[f.k];
+    // Засварыг хадгалахаас өмнө өөрчлөгдсөн талбаруудыг харуулж баталгаажуулна (санамсаргүй засвараас сэргийлнэ)
+    if (isEdit) {
+      const norm = x => (x == null ? '' : String(x).trim());
+      const shown = (f, val) => {
+        const el = ctrls[f.k];
+        if (el?.tagName === 'SELECT') { const o = [...el.options].find(o => o.value === norm(val)); if (o && o.value !== '') return o.text; }
+        return norm(val) || '—';
+      };
+      const changes = inputs.filter(f => !f.virtual && body[f.k] !== undefined && norm(body[f.k]) !== norm(row[f.k])
+        && !(f.type === 'number' && norm(row[f.k]) !== '' && Number(body[f.k]) === Number(row[f.k])))
+        .map(f => `• ${f.label.replace(/\s*\*$/, '')}: ${shown(f, row[f.k])} → ${shown(f, body[f.k])}`);
+      if (!changes.length) { dlg.close(); toast('Өөрчлөлт алга'); return; }
+      if (!confirmSave(changes)) return;
+    }
     save.disabled = true; err.className = 'form-msg'; err.textContent = '';
     try {
       if (isEdit) await api('PUT', `/api/r/${cfg.res}/${row.id}`, body);
@@ -1647,15 +1665,36 @@ function expenseBoard(rows) {
   ];
 }
 
-PAGES.expenses = main => crudWithBoard(main, {
+// Зардлын жагсаалт (холбогдох зардлын сонголтод ашиглана) — самбар шинэчлэгдэх бүрт
+let expenseRows = [];
+const expenseLabel = r => [r.date, r.type, r.feed_name, r.description, r.supplier, FMT.money(r.total)].filter(Boolean).join(' · ');
+// Үндсэн зардлын мөрөнд "+ Тээвэр": тухайн зардалд холбогдсон тээврийн зардлын маягт
+const addLinkedBtn = (r, refresh) => (!r.related_ref && canMod('expenses', 2)
+  ? h('button', { type: 'button', class: 'btn ghost small', onclick: e => {
+    e.stopPropagation();
+    openForm(EXPENSE_CFG, null, refresh, canMod('expenses', 3),
+      { type: 'Тээвэр', related_ref: String(r.id), date: r.date, description: `${r.feed_name || r.description || r.type} тээвэр` });
+  } }, '+ Тээвэр') : null);
+const EXPENSE_CFG = {
   res: 'expenses', module: 'expenses', photos: true, title: 'Зардлын бүртгэл', itemName: 'зардал', addLabel: '+ Зардал нэмэх',
   // "Мал авсан" мөр малын бүртгэлээс автоматаар орно — үнийг малын бүртгэл дээр засна
-  autoAction: r => (canMod('animals', 1) ? h('a', { class: 'btn ghost small', href: '#/animals' }, 'Малын бүртгэл') : null),
+  // "Мал авсан" мөрөнд мөн "+ Тээвэр" (малын тээвэр г.м. нэмэлт зардал)
+  autoAction: (r, _open, refresh) => [addLinkedBtn(r, refresh),
+    canMod('animals', 1) ? h('a', { class: 'btn ghost small', href: '#/animals' }, 'Малын бүртгэл') : null],
+  // Үндсэн зардал дээр "+ Тээвэр": тухайн зардалд холбогдсон тээврийн зардал нэмнэ
+  extraAction: (r, refresh) => addLinkedBtn(r, refresh),
   columns: [
-    { k: 'date', label: 'Огноо' }, { k: 'type', label: 'Төрөл' }, { k: 'feed_name', label: 'Дэд төрөл' }, { k: 'description', label: 'Тайлбар' },
+    // Урт текстэй баганууд мөр шилжинэ (хүснэгт хажуу тийш гүйлгэхгүй багтана)
+    { k: 'date', label: 'Огноо' }, { k: 'type', label: 'Төрөл', cls: 'wrap-cell' }, { k: 'feed_name', label: 'Дэд төрөл', cls: 'wrap-cell' },
+    { k: 'description', label: 'Тайлбар', cls: 'wrap-cell wide' },
     { k: 'qty', label: 'Тоо', f: 'num', render: r => qtyUnit(r.qty, r.unit), csv: r => qtyUnit(r.qty, r.unit) },
     { k: 'unit_price', label: 'Нэгж үнэ', f: 'money' },
-    { k: 'total', label: 'Нийт', f: 'money' }, { k: 'supplier', label: 'Нийлүүлэгч' }
+    { k: 'total', label: 'Нийт', f: 'money' }, { k: 'supplier', label: 'Нийлүүлэгч', cls: 'wrap-cell' },
+    // Холбоос: нэмэлт зардал → үндсэн зардал; үндсэн зардал → нэмэлт зардлын нийлбэр
+    { k: 'related_label', label: 'Холбогдох зардал', cls: 'wrap-cell wide',
+      render: r => (r.related_label ? h('span', { class: 'muted small' }, '↳ ' + r.related_label)
+        : r.linked_total ? h('span', { class: 'small' }, `+${FMT.money(r.linked_total)} нэмэлт · нийт ${FMT.money((Number(r.total) || 0) + r.linked_total)}`) : ''),
+      csv: r => r.related_label || (r.linked_total ? `+${r.linked_total}` : '') }
   ],
   totals: ['total'],
   filters: [{ k: 'type', label: 'Төрөл', options: rows => uniq(rows, 'type') }],
@@ -1669,12 +1708,17 @@ PAGES.expenses = main => crudWithBoard(main, {
       onChange: fillFeedPrice },
     { k: 'unit', label: 'Нэгж', type: 'select', showIf: v => v.type === FEED_TYPE, def: 'кг',
       options: () => opt(FEED_UNITS), onChange: fillFeedPrice },
+    // Тээвэр г.м. нэмэлт зардлыг аль зардалтай холбоотойг сонгоно (заавал биш)
+    { k: 'related_ref', label: 'Холбогдох зардал', type: 'select', full: true, showIf: v => v.type !== FEED_TYPE,
+      options: () => expenseRows.filter(r => !r.related_ref)
+        .map(r => [String(r.id), expenseLabel(r)]) },
     { k: 'description', label: 'Зардлын тайлбар', full: true },
     { k: 'qty', label: 'Тоо', type: 'number' },
     { k: 'unit_price', label: 'Нэгж үнэ ₮', type: 'number' },
     { k: 'supplier', label: 'Нийлүүлэгч', full: true, suggest: () => state.lk.suggest.supplier }
   ]
-}, expenseBoard);
+};
+PAGES.expenses = main => crudWithBoard(main, EXPENSE_CFG, rows => { expenseRows = rows; return expenseBoard(rows); });
 
 // ----- Бойны бүртгэл: зарахад бэлэн → бой товлогдсон → гулууз хүлээгдэж буй → бойлсон -----
 // Бойноос гарсан мах нийт махны үлдэгдэлд нэмэгдэж, Борлуулалтын бүртгэлийн "Мах зарах"-аар зарагдана
@@ -1742,7 +1786,16 @@ PAGES.slaughter = async main => {
       e.preventDefault();
       try {
         const body = { tag_id: a.tag_id, planned_date: planned.value, slaughtered_date: done.value || null, carcass_weight: kg.value || null };
-        if (a.slaughter_id) await api('PUT', `/api/r/slaughters/${a.slaughter_id}`, body);
+        if (a.slaughter_id) {
+          // Бүртгэлтэй бойг засахад өөрчлөлтийг баталгаажуулна
+          const ch = [['Бойнд орох огноо', a.slaughter_planned, body.planned_date], ['Бойнд орсон огноо', a.slaughtered_date, body.slaughtered_date],
+            ['Гарсан махны жин', a.carcass_weight, body.carcass_weight]]
+            .filter(([, o, n]) => String(o ?? '') !== String(n ?? '') && !(o != null && n != null && Number(o) === Number(n)))
+            .map(([l, o, n]) => `• ${l}: ${o ?? '—'} → ${n ?? '—'}`);
+          if (!ch.length) { dlg.close(); toast('Өөрчлөлт алга'); return; }
+          if (!confirmSave(ch)) return;
+          await api('PUT', `/api/r/slaughters/${a.slaughter_id}`, body);
+        }
         else await api('POST', '/api/r/slaughters', body);
         dlg.close(); toast(`${a.tag_id}: бой бүртгэгдлээ`); reload();
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
@@ -1876,6 +1929,7 @@ PAGES.tasks = async main => {
   const cfgForDay = day => ({ ...TASK_CFG, fields: TASK_FIELDS.map(f => (f.k === 'date' ? { ...f, def: () => day } : f)) });
 
   async function markDone(r) {
+    if (!confirm(`${r.type}${r.tag_id ? ' (' + r.tag_id + ')' : ''} — хийгдсэн гэж тэмдэглэх үү?`)) return;
     try { await api('PUT', `/api/r/tasks/${r.id}`, taskBody(r, { status: 'Хийгдсэн', done_date: today() })); toast(`${r.type}: хийгдсэн`); reload(); }
     catch (e) { toast(e.message, 'err'); }
   }
@@ -2255,6 +2309,14 @@ const SETTING_TABS = [
 
 // Хөрөнгө оруулагчид — ашгийн хувь, олгох давтамж, хугацаа (Тохиргоо → Ерөнхий)
 const PAYOUT_PERIODS = ['Сар бүр', 'Улирал бүр', 'Хагас жил бүр', 'Жил бүр', 'Борлуулалт бүрийн дараа', 'Гэрээний төгсгөлд'];
+async function lookupInvestor(values, ctrls) {
+  const digits = String(values.phone || '').replace(/\D/g, '').replace(/^976(?=\d{8}$)/, '');
+  if (digits.length !== 8) { setFormValue(values, ctrls, 'name', ''); return; }
+  try {
+    const u = await api('GET', `/api/settings/lookup-user?phone=${encodeURIComponent(digits)}`);
+    if (String(values.phone || '').replace(/\D/g, '').endsWith(digits)) setFormValue(values, ctrls, 'name', u.name);
+  } catch (e) { setFormValue(values, ctrls, 'name', ''); if (ctrls.name) ctrls.name.placeholder = e.message; }
+}
 const INVESTOR_CFG = () => ({
   res: 'partners', title: 'Хөрөнгө оруулагчид', itemName: 'хөрөнгө оруулагч', addLabel: '+ Хөрөнгө оруулагч нэмэх', write: 'admin',
   columns: [
@@ -2270,8 +2332,9 @@ const INVESTOR_CFG = () => ({
   ],
   totals: ['invested', 'percent'],
   fields: [
-    { k: 'name', label: 'Нэр', req: true, maxlength: 100 },
-    { k: 'phone', label: 'Утас', type: 'tel', maxlength: 20 },
+    // Утасны дугаараар вэбд бүртгэлтэй хэрэглэгчийг олж, нэрийг нь бүртгэлээс бөглөнө
+    { k: 'phone', label: 'Утас (вэбд бүртгэлтэй)', type: 'tel', req: true, maxlength: 20, onChange: lookupInvestor },
+    { k: 'name', label: 'Нэр (бүртгэлээс)', maxlength: 100, readonly: true },
     { k: 'invested', label: 'Оруулсан хөрөнгө ₮', type: 'number' },
     { k: 'percent', label: 'Ашгийн хувь (%)', type: 'number', req: true, max: 100 },
     { k: 'payout_period', label: 'Олгох давтамж', type: 'select', options: () => opt(PAYOUT_PERIODS), full: true },
@@ -2395,6 +2458,7 @@ async function membersSettings(box) {
       e.preventDefault();
       if (!found) return fetchUser();
       try {
+        if (m && !confirmSave()) return;
         if (m) await api('PATCH', `/api/farms/${fid}/members/${m.user_id}`, { perms: pe.get() });
         else { const r = await api('POST', `/api/farms/${fid}/members`, { phone: found.phone, perms: pe.get() }); toast(`${r.user.name} нэмэгдлээ`); }
         dlg.close(); if (m) toast('Хадгаллаа'); reload();
@@ -2455,11 +2519,28 @@ function locationFields(f, knownFarms = []) {
   };
 }
 
+// Фермийн өнгө: сонгох өнгөнүүд ба сонгогч (фермүүдийг ялгаж харуулна)
+const FARM_COLORS = ['#2f6b3f', '#1f6feb', '#c2410c', '#7c3aed', '#be185d', '#0e7490', '#a16207', '#4b5563'];
+const farmColor = f => f?.color || FARM_COLORS[0];
+function colorPicker(value) {
+  let cur = value || FARM_COLORS[0];
+  const sw = c => {
+    const b = h('button', { type: 'button', class: 'color-swatch' + (c === cur ? ' on' : ''), style: `--c:${c}`, 'aria-label': c, title: c,
+      onclick: () => { cur = c; el.querySelectorAll('.color-swatch').forEach(x => x.classList.toggle('on', x === b)); } });
+    return b;
+  };
+  const el = h('div', { class: 'color-picker', role: 'group', 'aria-label': 'Фермийн өнгө' }, FARM_COLORS.map(sw));
+  return { el, get: () => cur };
+}
+// Сонгосон фермийн өнгийг бүх хуудсанд (--farm) тавина
+const applyFarmColor = () => document.documentElement.style.setProperty('--farm', farmColor(state.lk?.farm));
+
 function generalSettings(box) {
   const farm = state.lk.farm;
   const loc = locationFields(farm);
   const name = h('input', { maxlength: 100, required: true, value: farm.name || '' });
   const note = h('textarea', { rows: 3, maxlength: 500 }); note.value = farm.note || '';
+  const color = colorPicker(farm.color);
   const msg = h('div', { class: 'form-msg' });
   const investorsBox = h('div', { class: 'investors-box' });
   box.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Ерөнхий'),
@@ -2467,8 +2548,9 @@ function generalSettings(box) {
       onsubmit: async e => {
         e.preventDefault();
         try {
-          await api('PATCH', `/api/farms/${farm.id}`, { name: name.value, note: note.value, ...loc.get() });
-          await loadLookups(); toast('Хадгаллаа');
+          if (!confirmSave()) return;
+          await api('PATCH', `/api/farms/${farm.id}`, { name: name.value, note: note.value, color: color.get(), ...loc.get() });
+          await loadLookups(); applyFarmColor(); toast('Хадгаллаа');
           document.querySelector('.sidebar').replaceWith(sidebar('settings'));
           msg.className = 'form-msg'; msg.textContent = '';
         } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
@@ -2476,6 +2558,7 @@ function generalSettings(box) {
     },
     h('div', { class: 'form-grid' },
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
+      h('div', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн өнгө'), color.el),
       ...loc.els,
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
     msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))),
@@ -2504,6 +2587,7 @@ function openFeedPlanSettings(onDone) {
   form.addEventListener('submit', async e => {
     e.preventDefault();
     try {
+      if (!confirmSave()) return;
       await api('PUT', '/api/settings', { plan_days: days.value, plan_other_budget: other.value, plan_species: species.value, plan_head_count: heads.value });
       dlg.close(); toast('Хадгаллаа'); onDone();
     } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
@@ -2551,6 +2635,7 @@ PAGES.users = async main => {
       try {
         const body = { name: name.value };
         if (!self) { body.role = role.value; body.status = status.value; }
+        if (!confirmSave()) return;
         await api('PATCH', `/api/admin/users/${u.id}`, body);
         if (pw.value) await api('POST', `/api/admin/users/${u.id}/password`, { password: pw.value });
         dlg.close(); toast('Хадгаллаа'); reload();
@@ -2628,6 +2713,9 @@ PAGES.farms = async main => {
   function farmForm(f) {
     const name = h('input', { maxlength: 100, required: true, value: f?.name || '' });
     const note = h('textarea', { rows: 2, maxlength: 500 }); note.value = f?.note || '';
+    // Шинэ ферм: бусад фермд ашиглаагүй эхний өнгийг санал болгоно
+    const used = new Set(farms.map(x => x.color).filter(Boolean));
+    const color = colorPicker(f?.color || FARM_COLORS.find(c => !used.has(c)) || FARM_COLORS[0]);
     const loc = locationFields(f, farms);
     // Анхдагч: Excel-ийн загвар тохиргоо; эсвэл өөр фермээс хуулах; эсвэл хоосон
     const copy = h('select', {},
@@ -2638,6 +2726,7 @@ PAGES.farms = async main => {
     const form = h('form', { class: 'modal-body' },
       h('div', { class: 'form-grid' },
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн нэр *'), name),
+        h('div', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн өнгө'), color.el),
         ...loc.els,
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note),
         !f ? h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тохиргоо'), copy) : null),
@@ -2648,9 +2737,10 @@ PAGES.farms = async main => {
     form.addEventListener('submit', async e => {
       e.preventDefault();
       try {
-        if (f) { await api('PATCH', `/api/farms/${f.id}`, { name: name.value, note: note.value, ...loc.get() }); dlg.close(); toast('Хадгаллаа'); reload(); }
+        if (f && !confirmSave()) return;
+        if (f) { await api('PATCH', `/api/farms/${f.id}`, { name: name.value, note: note.value, color: color.get(), ...loc.get() }); if (f.id === state.farmId) { await loadLookups(); applyFarmColor(); } dlg.close(); toast('Хадгаллаа'); reload(); }
         else {
-          const r = await api('POST', '/api/farms', { name: name.value, note: note.value, ...loc.get(), copy_from: copy.value || null });
+          const r = await api('POST', '/api/farms', { name: name.value, note: note.value, color: color.get(), ...loc.get(), copy_from: copy.value || null });
           dlg.close(); toast('Ферм үүслээ'); enter({ id: r.id });
         }
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
@@ -2670,9 +2760,9 @@ PAGES.farms = async main => {
     } catch (e) { toast(e.message, 'err'); }
   }
 
-  const card = f => h('div', { class: 'farm-card' + (f.id === state.farmId ? ' current' : '') },
+  const card = f => h('div', { class: 'farm-card' + (f.id === state.farmId ? ' current' : ''), style: `--fc:${farmColor(f)}` },
     h('div', { class: 'farm-card-head' },
-      h('h3', {}, f.name),
+      h('h3', {}, h('span', { class: 'farm-dot', 'aria-hidden': 'true' }), f.name),
       f.id === state.farmId ? badge('approved', 'Сонгосон') : null),
     farmLocation(f) ? h('div', { class: 'farm-location' }, '⌖ ', farmLocation(f)) : null,
     !f.mine ? h('div', { class: 'muted small' }, `Эзэмшигч: ${f.owner_name}${f.can_manage ? ` (${f.owner_phone})` : ''}`) : null,
@@ -2728,6 +2818,7 @@ PAGES.news = async main => {
       e.preventDefault();
       const payload = { title: title.value, body: body.value, published: pub.value === '1' };
       try {
+        if (n && !confirmSave()) return;
         if (n) await api('PUT', `/api/admin/news/${n.id}`, payload); else await api('POST', '/api/admin/news', payload);
         dlg.close(); toast('Хадгаллаа'); reload();
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }

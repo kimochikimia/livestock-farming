@@ -714,3 +714,24 @@ button.sell-choice:hover { border-color: var(--brand); background: var(--brand-s
 /* Тэнцүү 2 эгнээ: багана = ceil(картын тоо / 2) */
 .kpis.compact.two-rows { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); }
 @media (max-width: 1000px) { .kpis.compact.two-rows { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
+/* Урт текстэй нүд: мөр шилжинэ, хүснэгт багтана */
+table.data td.wrap-cell { white-space: normal; min-width: 80px; max-width: 160px; overflow-wrap: anywhere; }
+table.data td.wrap-cell.wide { min-width: 140px; max-width: 260px; }
+/* Хүснэгтийн мөр дээрх үйлдлийн товч (Засах, Устгах, + Тээвэр, Жин бүртгэх г.м.) — компьютер дээр жижиг */
+@media (min-width: 901px) {
+  td.row-actions .btn, .weigh-actions .btn { padding: 3px 9px; font-size: 12px; line-height: 1.4; border-radius: 6px; min-height: 0; }
+  td.row-actions .btn + .btn { margin-left: 4px; }
+  td.row-actions { padding-top: 4px; padding-bottom: 4px; }
+}
+/* Фермийн өнгө: сонгогч, хажуугийн цэсийн ферм, фермийн карт */
+.color-picker { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
+.color-swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--surface); background: var(--c); cursor: pointer; box-shadow: 0 0 0 1px var(--border); padding: 0; }
+.color-swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--c); }
+.farm-switch { border-left: 5px solid var(--fc, var(--brand)); background: color-mix(in srgb, var(--fc, var(--brand)) 12%, var(--surface)); }
+.farm-switch strong, .farm-switch-action { color: var(--fc, var(--brand)); }
+.farm-switch:hover { border-color: var(--fc, var(--brand)); }
+.farm-card { border-top: 5px solid var(--fc, var(--brand)); }
+.farm-card.current { border-color: var(--fc, var(--brand)); box-shadow: 0 0 0 1px var(--fc, var(--brand)) inset; border-top-width: 5px; }
+.farm-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--fc, var(--brand)); margin-right: 8px; vertical-align: middle; }
+/* Сонгосон фермийн өнгөөр дэлгэцийн дээд хэсэгт нимгэн зураас */
+body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; height: 4px; background: var(--farm, transparent); z-index: 50; }

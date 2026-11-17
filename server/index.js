@@ -295,8 +295,15 @@ function checkLocation(body) {
   return loc;
 }
 
+// Фермийн өнгө: #rrggbb эсвэл хоосон
+const checkColor = c => {
+  if (c == null || c === '') return null;
+  if (!/^#[0-9a-f]{6}$/i.test(String(c))) throw new HttpError(400, 'Фермийн өнгө буруу байна');
+  return String(c).toLowerCase();
+};
 app.post('/api/farms', need('viewer'), async (req, res) => {
   const name = checkName(req.body.name, 'Фермийн нэрийг', 100);
+  const color = checkColor(req.body.color);
   const note = req.body.note ? String(req.body.note).trim().slice(0, 500) : null;
   const loc = checkLocation(req.body);
   let copyFrom = null;
@@ -307,8 +314,8 @@ app.post('/api/farms', need('viewer'), async (req, res) => {
     if (!canAccessFarm(req.user, copyFrom) && !member) throw new HttpError(400, 'Тохиргоо хуулах ферм олдсонгүй');
   }
   const id = await db.tx(async c => {
-    const { insertId } = await c.run('INSERT INTO farms(name, note, aimag, soum, bag, owner_id) VALUES(?, ?, ?, ?, ?, ?)',
-      [name, note, loc.aimag, loc.soum, loc.bag, req.user.id]);
+    const { insertId } = await c.run('INSERT INTO farms(name, note, aimag, soum, bag, color, owner_id) VALUES(?, ?, ?, ?, ?, ?, ?)',
+      [name, note, loc.aimag, loc.soum, loc.bag, color, req.user.id]);
     if (copyFrom) await copyFarmSettings(c, copyFrom.id, insertId);
     if (useTemplate) await applyTemplate(c, insertId);
     return insertId;
@@ -330,7 +337,8 @@ app.patch('/api/farms/:id', need('viewer'), async (req, res) => {
   const note = req.body.note !== undefined ? (String(req.body.note || '').trim().slice(0, 500) || null) : farm.note;
   // Байршлыг илгээсэн үед л шалгаж шинэчилнэ
   const loc = req.body.aimag !== undefined ? checkLocation(req.body) : { aimag: farm.aimag, soum: farm.soum, bag: farm.bag };
-  await db.run('UPDATE farms SET name = ?, note = ?, aimag = ?, soum = ?, bag = ? WHERE id = ?', [name, note, loc.aimag, loc.soum, loc.bag, farm.id]);
+  const color = req.body.color !== undefined ? checkColor(req.body.color) : farm.color;
+  await db.run('UPDATE farms SET name = ?, note = ?, aimag = ?, soum = ?, bag = ?, color = ? WHERE id = ?', [name, note, loc.aimag, loc.soum, loc.bag, color, farm.id]);
   await audit(req.user.id, 'Ферм засав', 'farms', farm.id, [name, loc.aimag, loc.soum, loc.bag].filter(Boolean).join(' · '), farm.id);
   res.json({ ok: true });
 });
@@ -466,6 +474,14 @@ app.get('/api/admin/audit', need('admin'), async (req, res) => {
 
 // ---------- Фермийн ерөнхий тохиргоо ----------
 app.get('/api/settings', async (req, res) => res.json(await getSettings(req.farm.id)));
+// Хөрөнгө оруулагч нэмэх: утасны дугаараар бүртгэлтэй (баталгаажсан) хэрэглэгчийн нэрийг харуулна
+app.get('/api/settings/lookup-user', async (req, res) => {
+  if (!farmFull(req)) throw new HttpError(403, 'Танд энэ үйлдлийг хийх эрх байхгүй');
+  const phone = checkPhone(req.query.phone);
+  const u = await db.one("SELECT name, phone FROM users WHERE phone = ? AND status = 'approved'", [phone]);
+  if (!u) throw new HttpError(404, 'Энэ дугаараар бүртгүүлсэн (баталгаажсан) хэрэглэгч олдсонгүй');
+  res.json(u);
+});
 app.put('/api/settings', async (req, res) => {
   requirePerm(req, null, 3);
   const changed = [];
@@ -503,7 +519,7 @@ app.get('/api/lookups', async (req, res) => {
   const col = async (sql, params) => (await db.q(sql, params)).map(r => r.v);
   const owner = await db.one('SELECT name FROM users WHERE id = ?', [req.farm.owner_id]);
   res.json({
-    farm: { id: req.farm.id, name: req.farm.name, note: req.farm.note, aimag: req.farm.aimag, soum: req.farm.soum, bag: req.farm.bag, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
+    farm: { id: req.farm.id, name: req.farm.name, color: req.farm.color, note: req.farm.note, aimag: req.farm.aimag, soum: req.farm.soum, bag: req.farm.bag, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
     species: SPECIES,
     sexes: SEXES,
     classes: await db.q('SELECT species, age_name, age, sex, target_weight FROM animal_classes WHERE farm_id = ? ORDER BY id', [fid]),
