@@ -138,7 +138,9 @@ async function checkSlaughter(v, db, farmId) {
   if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
   const last = (await db.one('SELECT MAX(date) d FROM weighings WHERE animal_id = ?', [a.id])).d;
   if (last && v.date < last) throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) сүүлийн жинлэлтийн огнооноос (${last}) өмнө байж болохгүй`);
-  if (v.shipped_date && v.shipped_date < v.date) throw new HttpError(400, `${a.tag_id}: ачигдсан огноо (${v.shipped_date}) бойлох өдрөөс (${v.date}) өмнө байж болохгүй`);
+  // Ачилтын огноог "Мах ачилт"-аас бүртгэнэ — бойлох өдрийг ачилтаас хойш болгож болохгүй
+  const s = await db.one('SELECT shipped_date FROM slaughters WHERE animal_id = ?', [a.id]);
+  if (s?.shipped_date && s.shipped_date < v.date) throw new HttpError(400, `${a.tag_id}: бойлох өдөр (${v.date}) ачигдсан огнооноос (${s.shipped_date}) хойш байж болохгүй`);
 }
 
 // ---------- Тэжээлийн нөөц: "Тэжээл" төрлийн зардал = орлого, feed_usage = зарцуулалт ----------
@@ -402,8 +404,8 @@ const resources = {
     fields: {
       date: { t: 'date', req: true, label: 'Бойлох өдөр' },
       tag_id: { t: 'text', req: true, max: 50, label: 'Малын ID' },
-      carcass_weight: { t: 'num', max: 3000, label: 'Гулуузны жин' },
-      shipped_date: { t: 'date', label: 'Худалдахаар ачигдсан огноо' }
+      carcass_weight: { t: 'num', max: 3000, label: 'Гулуузны жин' }
+      // shipped_date — зөвхөн "Мах ачилт"-аар (POST /api/slaughters/ship) бүртгэнэ
     },
     prepare: checkSlaughter,
     list: async (db, farmId) => (await withCurrentAgeName(db, farmId, await db.q(`
@@ -428,12 +430,35 @@ const resources = {
       price: { t: 'num', label: 'Зарсан үнэ (₮/кг)' },
       note: { t: 'text', max: 500, label: 'Тэмдэглэл' }
     },
-    list: async (db, farmId) => (await db.q(`
-      SELECT s.*,
-        (SELECT COALESCE(SUM(x.carcass_weight), 0) FROM slaughters x WHERE x.farm_id = s.farm_id AND x.shipped_date = s.shipped_date) AS shipped_weight,
-        (SELECT COUNT(*) FROM slaughters x WHERE x.farm_id = s.farm_id AND x.shipped_date = s.shipped_date) AS heads,
-        COALESCE(s.sold_weight, 0) * COALESCE(s.price, 0) AS revenue
-      FROM sales s WHERE s.farm_id = ? ORDER BY s.shipped_date DESC, s.id DESC`, [farmId]))
+    // Ачилт бүрт (огноогоор) нэг борлуулалт; огноо нь "Мах ачилт"-д бүртгэгдсэн байх ёстой
+    async prepare(v, db, farmId, id) {
+      const old = id ? await db.one('SELECT shipped_date FROM sales WHERE id = ? AND farm_id = ?', [id, farmId]) : null;
+      if (old?.shipped_date !== v.shipped_date
+        && !await db.one('SELECT 1 x FROM slaughters WHERE farm_id = ? AND shipped_date = ? LIMIT 1', [farmId, v.shipped_date])) {
+        throw new HttpError(400, `${v.shipped_date}-нд ачигдсан гулууз алга. Эхлээд "Мах ачилт"-д ачилтыг бүртгэнэ үү`);
+      }
+      if (await db.one('SELECT 1 x FROM sales WHERE farm_id = ? AND shipped_date = ? AND id <> ?', [farmId, v.shipped_date, id || 0])) {
+        throw new HttpError(409, `${v.shipped_date}-ний ачилтын борлуулалт аль хэдийн бүртгэгдсэн байна`);
+      }
+    },
+    // Бүртгэсэн борлуулалт + борлуулалт нь бүртгэгдээгүй ачилтууд (auto: 'ship' — үнэ оруулахад борлуулалт болно).
+    // Орлого = борлуулсан жин (оруулаагүй бол ачигдсан жин) × үнэ
+    async list(db, farmId) {
+      const ships = await db.q(`SELECT shipped_date, COUNT(*) heads, COALESCE(SUM(carcass_weight), 0) shipped_weight
+        FROM slaughters WHERE farm_id = ? AND shipped_date IS NOT NULL GROUP BY shipped_date`, [farmId]);
+      const byDate = new Map(ships.map(s => [s.shipped_date, s]));
+      const sales = (await db.q('SELECT * FROM sales WHERE farm_id = ? ORDER BY shipped_date DESC, id DESC', [farmId])).map(s => {
+        const sh = byDate.get(s.shipped_date);
+        const heads = sh?.heads || 0, shipped_weight = sh?.shipped_weight || 0;
+        const kg = s.sold_weight ?? shipped_weight;
+        return { ...s, heads, shipped_weight, revenue: s.price != null ? kg * s.price : null };
+      });
+      const pending = ships.filter(sh => !sales.some(s => s.shipped_date === sh.shipped_date)).map(sh => ({
+        id: 'ship-' + sh.shipped_date, auto: 'ship', shipped_date: sh.shipped_date, heads: sh.heads, shipped_weight: sh.shipped_weight,
+        sold_date: null, sold_weight: null, price: null, revenue: null, note: null
+      }));
+      return [...pending, ...sales].sort((a, b) => (a.shipped_date < b.shipped_date ? 1 : a.shipped_date > b.shipped_date ? -1 : 0));
+    }
   },
 
   market_prices: {

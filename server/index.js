@@ -124,7 +124,7 @@ async function loadFarm(req) {
   return farm;
 }
 // Фермийн доторх хүсэлтүүд — сонгосон фермээр шүүгдэнэ
-app.use(['/api/r', '/api/photos', '/api/animals', '/api/lookups', '/api/dashboard', '/api/settings'], async (req, res, next) => { await loadFarm(req); next(); });
+app.use(['/api/r', '/api/photos', '/api/animals', '/api/slaughters', '/api/lookups', '/api/dashboard', '/api/settings'], async (req, res, next) => { await loadFarm(req); next(); });
 const farmFull = req => req.farmRole === 'owner' || req.farmRole === 'admin';
 function permLevel(req, mod) {
   if (!req.farm) return 0;
@@ -533,7 +533,12 @@ app.get('/api/dashboard', async (req, res) => {
     t.n += 1; t.total += r.total;
   }
   byType.sort((a, b) => b.total - a.total);
-  const sales = await db.one('SELECT COALESCE(SUM(COALESCE(sold_weight,0) * COALESCE(price,0)), 0) t, COALESCE(SUM(sold_weight), 0) kg FROM sales WHERE farm_id = ?', [fid]);
+  // Борлуулалт: борлуулсан жин оруулаагүй бол ачигдсан жингээр (sales.list-ийн тооцоо)
+  const saleRows = (await resources.sales.list(db, fid)).filter(r => !r.auto);
+  const sales = {
+    t: saleRows.reduce((s, r) => s + (r.revenue || 0), 0),
+    kg: saleRows.reduce((s, r) => s + (r.price != null ? (r.sold_weight ?? r.shipped_weight) : (r.sold_weight || 0)), 0)
+  };
   const profit = sales.t - expenseTotal;
   const partners = (await db.q('SELECT * FROM partners WHERE farm_id = ? ORDER BY id', [fid])).map(p => ({ ...p, amount: profit * p.percent / 100 }));
   const animals = await resources.animals.list(db, fid);
@@ -585,8 +590,12 @@ app.get('/api/dashboard', async (req, res) => {
   for (let i = 11; i >= 0; i--) { const d = new Date(today.getFullYear(), today.getMonth() - i, 1); months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); }
   const expM = await db.q(`SELECT DATE_FORMAT(date, '%Y-%m') m, SUM(COALESCE(qty,0) * COALESCE(unit_price,0)) v FROM expenses
     WHERE farm_id = ? AND date >= ? GROUP BY m`, [fid, months[0] + '-01']);
-  const revM = await db.q(`SELECT DATE_FORMAT(COALESCE(sold_date, shipped_date), '%Y-%m') m, SUM(COALESCE(sold_weight,0) * COALESCE(price,0)) v FROM sales
-    WHERE farm_id = ? AND COALESCE(sold_date, shipped_date) >= ? GROUP BY m`, [fid, months[0] + '-01']);
+  const revM = [];
+  for (const r of saleRows) {
+    const m = (r.sold_date || r.shipped_date).slice(0, 7);
+    const x = revM.find(y => y.m === m) || (revM.push({ m, v: 0 }), revM[revM.length - 1]);
+    x.v += r.revenue || 0;
+  }
   const animalM = {};
   for (const r of animalExp) { const m = r.date.slice(0, 7); animalM[m] = (animalM[m] || 0) + r.total; }
   const monthly = months.map(m => ({ month: m, expense: (expM.find(r => r.m === m)?.v || 0) + (animalM[m] || 0), revenue: revM.find(r => r.m === m)?.v || 0 }));
@@ -727,6 +736,34 @@ app.post('/api/animals/:id/to-sell', async (req, res) => {
   removePhotoFiles(photos);
   await farmAudit(req, on ? 'Зарах мал руу шилжүүлэв' : 'Зарах малаас буцаав', 'animals', id, a.tag_id + (s ? ' (бойн хуваарь цуцлагдсан)' : ''));
   res.json({ ok: true, scheduleCancelled: !!s });
+});
+
+// ---------- Мах ачилт: бойлсон гулуузны ачилтын огноог (олноор нь) бүртгэх / цуцлах ----------
+app.post('/api/slaughters/ship', async (req, res) => {
+  requirePerm(req, ['sell', 'slaughter'], 2);
+  const fid = req.farm.id;
+  const ids = [...new Set([].concat(req.body.ids || []).map(Number))].filter(n => Number.isInteger(n) && n > 0);
+  if (!ids.length) throw new HttpError(400, 'Гулууз сонгоно уу');
+  if (ids.length > 500) throw new HttpError(400, 'Хэт олон гулууз');
+  const date = req.body.shipped_date == null || req.body.shipped_date === '' ? null : validate({ d: { t: 'date', req: true, label: 'Ачилтын огноо' } }, { d: req.body.shipped_date }).d;
+  const rows = await db.q(`SELECT s.id, s.date, s.shipped_date, a.tag_id FROM slaughters s JOIN animals a ON a.id = s.animal_id
+    WHERE s.farm_id = ? AND s.id IN (${ids.map(() => '?').join(',')})`, [fid, ...ids]);
+  if (rows.length !== ids.length) throw new HttpError(404, 'Гулууз олдсонгүй');
+  const today = new Date(); today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+  const todayIso = today.toISOString().slice(0, 10);
+  for (const s of rows) {
+    if (s.date > todayIso) throw new HttpError(400, `${s.tag_id}: бойлох өдөр (${s.date}) болоогүй байна`);
+    if (date && date < s.date) throw new HttpError(400, `${s.tag_id}: ачилтын огноо (${date}) бойлох өдрөөс (${s.date}) өмнө байж болохгүй`);
+    // Зарагдсан ачилтаас гулуузыг гаргаж/шилжүүлж болохгүй
+    if (s.shipped_date && s.shipped_date !== date
+      && await db.one('SELECT 1 x FROM sales WHERE farm_id = ? AND shipped_date = ? AND sold_date IS NOT NULL', [fid, s.shipped_date])) {
+      throw new HttpError(400, `${s.tag_id}: ${s.shipped_date}-ний ачилт зарагдсан тул өөрчлөх боломжгүй`);
+    }
+  }
+  await db.run(`UPDATE slaughters SET shipped_date = ? WHERE farm_id = ? AND id IN (${ids.map(() => '?').join(',')})`, [date, fid, ...ids]);
+  await farmAudit(req, date ? 'Мах ачилт бүртгэв' : 'Мах ачилт цуцлав', 'slaughters', ids[0],
+    `${date || ''} ${rows.map(r => r.tag_id).join(', ')}`.trim());
+  res.json({ ok: true, count: ids.length });
 });
 
 // ---------- Зураг ----------

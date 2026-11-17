@@ -314,6 +314,9 @@ input[readonly] { background: var(--surface-2); color: var(--muted); }
 .multi { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; max-height: 180px; overflow-y: auto; background: var(--surface); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 99px; font-size: 13px; cursor: pointer; background: var(--surface-2); user-select: none; }
 .chip input { width: auto; margin: 0; accent-color: var(--brand); }
+/* Мах ачилт: мөр сонгох чагт */
+@media (min-width: 641px) { .pick-cell { width: 1%; text-align: center; } }
+.pick-cell input[type="checkbox"] { width: 18px; height: 18px; padding: 0; margin: 0; accent-color: var(--brand); cursor: pointer; vertical-align: middle; }
 .chip:has(input:checked) { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
 .chip.all { font-weight: 700; }
 

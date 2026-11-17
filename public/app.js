@@ -133,6 +133,7 @@ const NAV = [
   { group: 'sales', farm: true, label: 'Борлуулалт', icon: '↗' },
   { path: 'sell', farm: true, parent: 'sales', module: 'sell', label: 'Зарах малын жагсаалт', icon: '✓' },
   { path: 'slaughter', farm: true, parent: 'sales', module: 'slaughter', label: 'Бойны жагсаалт', icon: '▤' },
+  { path: 'shipping', farm: true, parent: 'sales', module: 'slaughter', label: 'Мах ачилт', icon: '⇪' },
   { path: 'sales', farm: true, parent: 'sales', module: 'sales', label: 'Борлуулалтын бүртгэл', icon: '₮' },
   { path: 'expenses', farm: true, module: 'expenses', label: 'Зардлын бүртгэл', icon: '₮' },
   { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
@@ -471,7 +472,9 @@ async function crudSection(container, cfg) {
     catch (e) { toast(e.message, 'err'); }
   }
   // Өөр бүртгэлээс автоматаар орсон мөр (r.auto) энд засагдахгүй — эх бүртгэл рүү очих товч (cfg.autoAction)
-  const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r)) : h('td', { class: 'row-actions' },
+  // cfg.autoOpen(r, refresh): автомат мөр дээр дарахад (жишээ нь ачилт → борлуулалтын маягт) нээх үйлдэл
+  const autoOpen = r => (canWrite && cfg.autoOpen ? () => cfg.autoOpen(r, refresh, canDel) : null);
+  const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r, autoOpen(r))) : h('td', { class: 'row-actions' },
     h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg, r, refresh, canDel); } }, 'Засах'),
     canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeRow(r); } }, 'Устгах') : null));
 
@@ -498,8 +501,8 @@ async function crudSection(container, cfg) {
   function draw() {
     const list = filtered();
     tbody.replaceChildren(...list.map(r => h('tr', {
-      class: canWrite && !r.auto ? 'clickable' : r.auto ? 'auto-row' : null,
-      onclick: canWrite && !r.auto ? () => openForm(cfg, r, refresh, canDel) : null
+      class: (canWrite && !r.auto) || autoOpen(r) ? 'clickable' : r.auto ? 'auto-row' : null,
+      onclick: r.auto ? autoOpen(r) : canWrite ? () => openForm(cfg, r, refresh, canDel) : null
     }, cfg.columns.map(c => h('td', { class: (c.cls || '') + (NUMERIC.has(c.f) ? ' num' : ''), 'data-label': c.label },
       c.render ? c.render(r) : FMT[c.f || 'text'](r[c.k]))), showActions ? actionCell(r) : null)));
     if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: cfg.columns.length + (showActions ? 1 : 0), class: 'empty' }, cfg.empty || 'Бичлэг алга')));
@@ -630,7 +633,8 @@ function combo(input, getItems) {
   });
 }
 
-function openForm(cfg, row, onDone, canDel) {
+// init — шинэ бичлэгийн урьдчилан бөглөх утгууд (def-ээс давуу)
+function openForm(cfg, row, onDone, canDel, init) {
   const isEdit = !!row;
   if (isEdit && cfg.fields.some(f => f.createOnly)) cfg = { ...cfg, fields: cfg.fields.filter(f => !f.createOnly) };
   // "section" = гарчиг, "info" = автоматаар тооцоолсон утга (илгээгдэхгүй)
@@ -639,6 +643,7 @@ function openForm(cfg, row, onDone, canDel) {
   const values = {};
   for (const f of inputs) {
     if (isEdit) values[f.k] = row[f.k] ?? '';
+    else if (init && init[f.k] != null) values[f.k] = init[f.k];
     else values[f.k] = typeof f.def === 'function' ? f.def() : (f.def ?? '');
   }
   const ctrls = {};
@@ -1385,6 +1390,111 @@ PAGES.sell = async main => {
   draw();
 };
 
+// ----- Мах ачилт: бойлсон гулуузыг ачилтын огноогоор бүртгэнэ; ижил огноотой ачилт = нэг борлуулалт -----
+const SHIP_STATES = ['Ачигдаагүй', 'Ачигдсан', 'Зарагдсан'];
+PAGES.shipping = async main => {
+  const [slaughters, sales] = await Promise.all([api('GET', '/api/r/slaughters'), api('GET', '/api/r/sales')]);
+  const tday = today();
+  const soldDates = new Set(sales.filter(s => !s.auto && s.sold_date).map(s => s.shipped_date));
+  // Зөвхөн бойлсон (бойлох өдөр нь болсон) гулууз; ачигдаагүй нь эхэнд
+  const rows = slaughters.filter(s => s.date <= tday)
+    .map(s => ({ ...s, ship_state: !s.shipped_date ? 'Ачигдаагүй' : soldDates.has(s.shipped_date) ? 'Зарагдсан' : 'Ачигдсан' }))
+    .sort((a, b) => SHIP_STATES.indexOf(a.ship_state) - SHIP_STATES.indexOf(b.ship_state)
+      || String(b.shipped_date || b.date).localeCompare(String(a.shipped_date || a.date)));
+  const canWrite = canMod('slaughter', 2) || canMod('sell', 2);
+  const selected = new Set();
+  let q = '', st = '';
+  const tbody = h('tbody'), tfoot = h('tfoot');
+  const count = h('span', { class: 'muted small' });
+  const shipBtn = h('button', { class: 'btn primary small', type: 'button', disabled: true, onclick: () => openShip(rows.filter(r => selected.has(r.id))) });
+  const selectable = r => canWrite && r.ship_state !== 'Зарагдсан';
+  const reload = async () => { await loadLookups(); await PAGES.shipping(main); };
+
+  // Ачилтын огноо бүртгэх / өөрчлөх / цуцлах (нэг эсвэл олон гулууз)
+  function openShip(list) {
+    if (!list.length) return;
+    const one = list.length === 1 ? list[0] : null;
+    const minDate = list.map(r => r.date).sort().pop();
+    const date = h('input', { type: 'date', value: one?.shipped_date || tday, min: minDate, required: true });
+    const msg = h('div', { class: 'form-msg' });
+    const kg = list.reduce((s, r) => s + (Number(r.carcass_weight) || 0), 0);
+    const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
+    const send = async shipped_date => {
+      msg.className = 'form-msg'; msg.textContent = '';
+      try {
+        await api('POST', '/api/slaughters/ship', { ids: list.map(r => r.id), shipped_date });
+        dlg.close(); toast(shipped_date ? `${list.length} гулууз ${shipped_date}-нд ачигдлаа` : 'Ачилт цуцлагдлаа'); reload();
+      } catch (e) { msg.className = 'form-msg err'; msg.textContent = e.message; }
+    };
+    const form = h('form', { class: 'modal-body' },
+      h('div', { class: 'kv-grid sched-info' },
+        one ? info('Малын ID', one.tag_id + (one.tag_color ? ` (${one.tag_color})` : '')) : info('Гулууз', `${list.length} толгой`),
+        one ? info('Төрөл · нэршил', `${one.species} · ${one.age_name ?? ''}`) : info('Малын ID', list.map(r => r.tag_id).join(', ')),
+        info('Бойлсон өдөр', one ? one.date : null),
+        info('Гулуузны жин', kg ? FMT.kg(kg) : null)),
+      h('div', { class: 'form-grid' }, h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Ачилтын огноо *'), date)),
+      msg,
+      h('div', { class: 'modal-actions' },
+        list.some(r => r.shipped_date) ? h('button', { class: 'btn danger', type: 'button', onclick: () => {
+          if (confirm('Ачилтыг цуцлах уу?')) send(null);
+        } }, 'Ачилт цуцлах') : null,
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
+        h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')));
+    form.addEventListener('submit', e => { e.preventDefault(); send(date.value); });
+    const dlg = modal(one ? `Мах ачилт — ${one.tag_id}` : `Мах ачилт — ${list.length} гулууз`, form);
+  }
+
+  const visible = () => rows.filter(r => (!st || r.ship_state === st)
+    && (!q || [r.tag_id, r.tag_color, r.species, r.age_name, r.shipped_date, r.date].some(v => String(v ?? '').toLowerCase().includes(q))));
+  const allBox = h('input', { type: 'checkbox', 'aria-label': 'Бүгдийг сонгох', onchange: e => {
+    for (const r of visible().filter(selectable)) e.target.checked ? selected.add(r.id) : selected.delete(r.id);
+    draw();
+  } });
+  function draw() {
+    const list = visible();
+    tbody.replaceChildren(...list.map(r => {
+      const cb = h('input', { type: 'checkbox', 'aria-label': 'Сонгох', disabled: !selectable(r), onclick: e => e.stopPropagation(),
+        onchange: e => { e.target.checked ? selected.add(r.id) : selected.delete(r.id); draw(); } });
+      cb.checked = selected.has(r.id);
+      return h('tr', { class: selectable(r) ? 'clickable' : null, onclick: selectable(r) ? () => openShip([r]) : null },
+        h('td', { class: 'pick-cell', 'data-label': 'Сонгох', onclick: e => e.stopPropagation() }, selectable(r) ? cb : null),
+        h('td', { 'data-label': 'Бойлсон өдөр' }, r.date),
+        h('td', { 'data-label': 'Малын ID' }, h('span', { class: 'tag' }, r.tag_id, r.tag_color ? h('small', {}, ' ' + r.tag_color) : null)),
+        h('td', { 'data-label': 'Төрөл' }, r.species), h('td', { 'data-label': 'Насны нэршил' }, r.age_name ?? ''),
+        h('td', { class: 'num', 'data-label': 'Гулуузны жин' }, FMT.kg(r.carcass_weight)),
+        h('td', { 'data-label': 'Ачилтын огноо' }, r.shipped_date ? h('strong', {}, `${r.shipped_date} (${weekday(r.shipped_date)})`) : h('span', { class: 'muted' }, '—')),
+        h('td', { 'data-label': 'Төлөв' }, badge(r.ship_state === 'Ачигдаагүй' ? 'Хүлээгдэж буй' : r.ship_state === 'Ачигдсан' ? 'Идэвхтэй' : 'Зарагдсан', r.ship_state)));
+    }));
+    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: 8, class: 'empty' }, 'Бойлсон гулууз алга')));
+    tfoot.replaceChildren(list.length ? h('tr', {}, h('td', {}, 'Нийт'), h('td'), h('td'), h('td'), h('td'),
+      h('td', { class: 'num', 'data-label': 'Гулуузны жин' }, FMT.kg(list.reduce((s, r) => s + (Number(r.carcass_weight) || 0), 0))), h('td'), h('td')) : '');
+    const sel = list.filter(r => selected.has(r.id)).length;
+    for (const id of [...selected]) if (!rows.some(r => r.id === id && selectable(r))) selected.delete(id);
+    shipBtn.textContent = selected.size ? `Сонгосныг ачих (${selected.size})` : 'Сонгосныг ачих';
+    shipBtn.disabled = !selected.size;
+    const pickable = list.filter(selectable);
+    allBox.checked = pickable.length > 0 && sel === pickable.length;
+    count.textContent = `${list.length} гулууз`;
+  }
+
+  main.replaceChildren(h('section', { class: 'card' },
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Мах ачилт'),
+      h('div', { class: 'toolbar-right' },
+        h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', oninput: e => { q = e.target.value.trim().toLowerCase(); draw(); } }),
+        h('select', { class: 'filter', onchange: e => { st = e.target.value; draw(); } },
+          h('option', { value: '' }, 'Төлөв: бүгд'), SHIP_STATES.map(s => h('option', { value: s }, s))),
+        canWrite ? shipBtn : null)),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+      h('thead', {}, h('tr', {},
+        h('th', { class: 'pick-cell' }, canWrite ? allBox : null),
+        ['Бойлсон өдөр', 'Малын ID', 'Төрөл', 'Насны нэршил'].map(t => h('th', {}, t)),
+        h('th', { class: 'num' }, 'Гулуузны жин'), h('th', {}, 'Ачилтын огноо'), h('th', {}, 'Төлөв'))),
+      tbody, tfoot)),
+    h('div', { class: 'table-foot' }, count)));
+  draw();
+};
+
 // ----- Хуваарьт ажил: жинлэх огноо болон бусад ажлын төлөвлөгөө -----
 const TASK_STATUSES = ['Төлөвлөсөн', 'Хийгдсэн', 'Цуцалсан'];
 const WEEKDAYS = ['Ня', 'Да', 'Мя', 'Лх', 'Пү', 'Ба', 'Бя'];
@@ -1573,28 +1683,52 @@ PAGES.slaughter = main => crudSection(main, {
   fields: [
     { k: 'tag_id', label: 'Малын ID', req: true, readonly: true },
     { k: 'date', label: 'Бойлох өдөр', type: 'date', req: true },
-    { k: 'carcass_weight', label: 'Гулуузны жин (кг)', type: 'number' },
-    { k: 'shipped_date', label: 'Ачигдсан огноо', type: 'date' }
+    { k: 'carcass_weight', label: 'Гулуузны жин (кг)', type: 'number' }
   ]
 });
 
-PAGES.sales = main => crudSection(main, {
-  res: 'sales', module: 'sales', photos: true, title: 'Борлуулалт', itemName: 'борлуулалт', addLabel: '+ Борлуулалт нэмэх',
-  columns: [
-    { k: 'shipped_date', label: 'Ачигдсан огноо' }, { k: 'heads', label: 'Толгой', f: 'num' },
-    { k: 'shipped_weight', label: 'Ачигдсан жин', f: 'kg' }, { k: 'sold_date', label: 'Зарсан өдөр' },
-    { k: 'sold_weight', label: 'Борлуулсан жин', f: 'kg' }, { k: 'price', label: 'Үнэ ₮/кг', f: 'money' },
-    { k: 'revenue', label: 'Нийт орлого', f: 'money' }, { k: 'note', label: 'Тэмдэглэл' }
-  ],
-  totals: ['heads', 'shipped_weight', 'sold_weight', 'revenue'],
-  fields: [
-    { k: 'shipped_date', label: 'Худалдахаар ачигдсан огноо', type: 'date', req: true },
-    { k: 'sold_date', label: 'Зарсан өдөр', type: 'date' },
-    { k: 'sold_weight', label: 'Борлуулсан жин (кг)', type: 'number' },
-    { k: 'price', label: 'Зарсан үнэ ₮/кг', type: 'number' },
-    { k: 'note', label: 'Тэмдэглэл', full: true }
-  ]
-});
+// ----- Борлуулалтын бүртгэл: "Мах ачилт"-ын огноо бүр нэг мөр; үнэ оруулахад нийт орлого бодогдоно -----
+PAGES.sales = async main => {
+  // Ачилт бүрийн толгой, ачигдсан жин (маягтад харуулах, борлуулсан жинг бөглөх)
+  let ships = new Map();
+  const loadShips = async () => { ships = new Map((await api('GET', '/api/r/sales')).map(r => [r.shipped_date, r])); };
+  await loadShips();
+  const shipKg = v => ships.get(v.shipped_date)?.shipped_weight;
+  const cfg = {
+    res: 'sales', module: 'sales', photos: true, title: 'Борлуулалт', itemName: 'борлуулалт', noAdd: true,
+    empty: 'Ачилт алга. "Мах ачилт"-д гулуузны ачилтыг бүртгэнэ үү',
+    columns: [
+      { k: 'shipped_date', label: 'Ачигдсан огноо' }, { k: 'heads', label: 'Толгой', f: 'num' },
+      { k: 'shipped_weight', label: 'Ачигдсан жин', f: 'kg' }, { k: 'sold_date', label: 'Зарсан өдөр' },
+      { k: 'sold_weight', label: 'Борлуулсан жин', f: 'kg' }, { k: 'price', label: 'Үнэ ₮/кг', f: 'money' },
+      { k: 'revenue', label: 'Нийт орлого', f: 'money' },
+      { k: 'status', label: 'Төлөв', render: r => badge(r.auto ? 'Хүлээгдэж буй' : r.sold_date ? 'Зарагдсан' : 'Идэвхтэй',r.auto ? 'Үнэ оруулаагүй' : r.sold_date ? 'Зарагдсан' : 'Зараагүй'),
+        csv: r => (r.auto ? 'Үнэ оруулаагүй' : r.sold_date ? 'Зарагдсан' : 'Зараагүй') },
+      { k: 'note', label: 'Тэмдэглэл' }
+    ],
+    totals: ['heads', 'shipped_weight', 'revenue'],
+    // Борлуулалт нь бүртгэгдээгүй ачилт: дарахад огноо, жин нь бөглөгдсөн маягт нээгдэнэ
+    autoOpen: (r, refresh, canDel) => openForm(cfg, null, refresh, canDel,
+      { shipped_date: r.shipped_date, sold_weight: r.shipped_weight || null, sold_date: today() }),
+    autoAction: (r, open) => (open ? h('button', { type: 'button', class: 'btn primary small', onclick: e => { e.stopPropagation(); open(); } }, 'Үнэ оруулах') : null),
+    onChange: async () => { await loadShips(); await crudSection(main, cfg); },
+    fields: [
+      { k: 'shipped_date', label: 'Ачигдсан огноо', type: 'select', req: true, options: () => opt(state.lk.shipDates || []),
+        emptyText: () => 'Ачилт алга',
+        onChange: (values, ctrls) => setFormValue(values, ctrls, 'sold_weight', shipKg(values) ?? '') },
+      { k: 'ship_info', label: 'Толгой · ачигдсан жин', type: 'info',
+        compute: v => { const s = ships.get(v.shipped_date); return s ? `${s.heads} толгой · ${FMT.kg(s.shipped_weight)}` : null; } },
+      { k: 'sold_date', label: 'Зарсан өдөр', type: 'date', def: today },
+      { k: 'sold_weight', label: 'Борлуулсан жин (кг)', type: 'number' },
+      { k: 'price', label: 'Зарсан үнэ ₮/кг', type: 'number', req: true },
+      { k: 'revenue_info', label: 'Нийт орлого', type: 'info',
+        compute: v => { const kg = v.sold_weight !== '' && v.sold_weight != null ? Number(v.sold_weight) : shipKg(v); const p = Number(v.price);
+          return v.price !== '' && v.price != null && kg != null ? FMT.money(kg * p) : null; } },
+      { k: 'note', label: 'Тэмдэглэл', full: true }
+    ]
+  };
+  await crudSection(main, cfg);
+};
 
 PAGES.market = main => crudSection(main, {
   res: 'market_prices', module: 'market', title: 'Зах зээлийн махны үнийн судалгаа', itemName: 'үнэ', addLabel: '+ Үнэ нэмэх',
