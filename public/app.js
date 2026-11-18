@@ -29,6 +29,7 @@ const state = { user: null, lk: null, farmId: readFarm() };
 function setFarm(id) {
   state.farmId = id || null;
   state.lk = null;
+  applyFarmColor(null);
   try { if (id) localStorage.setItem(FARM_KEY, String(id)); else localStorage.removeItem(FARM_KEY); } catch { /* хувийн цонх */ }
 }
 // Фермийн эзэмшигч эсвэл админ — тухайн фермийн тохиргоог удирдана
@@ -161,7 +162,7 @@ async function loadLookups() { state.lk = await api('GET', '/api/lookups'); try 
 
 async function render() {
   const root = document.getElementById('app');
-  if (!state.user) return renderLanding(root);
+  if (!state.user) { applyFarmColor(null); return renderLanding(root); }
   const path = currentPath();
   const target = NAV.find(n => n.path === path);
   // "Миний фермүүд" = фермээс гарч, шинээр сонгох хуудас — фермийн цэсийг "Орох" дарсны дараа л харуулна
@@ -395,7 +396,8 @@ function compareValues(a, b) {
 }
 // Тусгай (crudSection-ээс бусад) хүснэгтэд DOM түвшинд эрэмбэлэлт + баганы хайлт нэмнэ.
 // tbody-г дахин зурахад (MutationObserver) шүүлт, эрэмбэлэлтийг автоматаар дахин хэрэглэнэ.
-function enhanceTable(table) {
+// filter: false — зөвхөн эрэмбэлэлт (баганы хайлтын мөргүй)
+function enhanceTable(table, { filter = true } = {}) {
   const head = table.tHead?.rows[0];
   const tbody = table.tBodies[0];
   if (!head || !tbody) return table;
@@ -408,19 +410,30 @@ function enhanceTable(table) {
     const inp = td.querySelector('input, select');
     return (inp ? inp.value : td.textContent).trim();
   };
-  const sortKey = t => { const n = Number(t.replace(/[^\d.-]/g, '')); return /\d/.test(t) && /^[\d\s,.\-₮%кг/]+$/i.test(t.replace(/\s+/g, ' ')) && !isNaN(n) ? n : t; };
+  const sortKey = raw => { const t = raw.replace(/^[▸▾]\s*/, ''); const n = Number(t.replace(/[^\d.-]/g, '')); return /\d/.test(t) && /^[\d\s,.+\-₮%кг/]+$/i.test(t.replace(/\s+/g, ' ')) && !isNaN(n) ? n : t; };
   let busy = false;
   const headLabels = ths.map(th => th.textContent.replace(/[▲▼]/g, '').trim());
+  // Анхны дараалал: эрэмбэлэлтийг болиход буцаана
+  const order = new WeakMap();
+  let seq = 0;
   function apply() {
     busy = true;
-    const rows = [...tbody.rows].filter(tr => !tr.querySelector('td.empty'));
+    const rows = [...tbody.rows].filter(tr => !tr.classList.contains('weigh-detail') && !tr.querySelector('td.empty'));
+    // Мөрийн дэлгэрэнгүй (жинлэлтийн түүх) эх мөртэйгөө хамт явна
+    const details = new Map(rows.map(tr => [tr, tr.nextElementSibling?.classList.contains('weigh-detail') ? tr.nextElementSibling : null]));
     // Утсан дээр карт хэлбэрээр харуулахад нүд бүрт баганын нэр
-    for (const tr of rows) [...tr.cells].forEach((td, i) => { if (!td.hasAttribute('data-label') && headLabels[i]) td.setAttribute('data-label', headLabels[i]); });
-    if (sortState.i >= 0) {
-      rows.sort((a, b) => sortState.dir * compareValues(sortKey(textOf(a, sortState.i)), sortKey(textOf(b, sortState.i))));
-      for (const tr of rows) tbody.append(tr);
+    for (const tr of rows) {
+      if (!order.has(tr)) order.set(tr, seq++);
+      [...tr.cells].forEach((td, i) => { if (!td.hasAttribute('data-label') && headLabels[i]) td.setAttribute('data-label', headLabels[i]); });
     }
-    for (const tr of rows) tr.hidden = !filters.every((q, i) => !q || textOf(tr, i).toLowerCase().includes(q));
+    const { i: col, dir } = sortState;
+    const sorted = [...rows].sort((a, b) => (col >= 0 ? dir * compareValues(sortKey(textOf(a, col)), sortKey(textOf(b, col))) : 0) || order.get(a) - order.get(b));
+    const next = sorted.flatMap(tr => (details.get(tr) ? [tr, details.get(tr)] : [tr]));
+    if (next.some((tr, k) => tbody.rows[k] !== tr)) for (const tr of next) tbody.append(tr);
+    for (const tr of rows) {
+      tr.hidden = !filters.every((q, i) => !q || textOf(tr, i).toLowerCase().includes(q));
+      if (details.get(tr)) details.get(tr).hidden = tr.hidden;
+    }
     obs.takeRecords();
     busy = false;
   }
@@ -432,7 +445,7 @@ function enhanceTable(table) {
     th.classList.add('sortable');
     th.title = 'Эрэмбэлэх';
     const arrow = h('span', { class: 'sort-arrow' });
-    th.append(arrow);
+    th.replaceChildren(h('span', { class: 'th-label' }, label), arrow);
     th.addEventListener('click', () => {
       if (sortState.i === i) { if (sortState.dir === 1) sortState.dir = -1; else sortState.i = -1; }
       else { sortState.i = i; sortState.dir = 1; }
@@ -441,13 +454,14 @@ function enhanceTable(table) {
       apply();
     });
   });
-  table.tHead.append(h('tr', { class: 'filter-row' }, ths.map((th, i) => h('th', {},
+  if (filter) table.tHead.append(h('tr', { class: 'filter-row' }, ths.map((th, i) => h('th', {},
     th.textContent.replace(/[▲▼]/g, '').trim()
       ? h('input', { type: 'search', class: 'col-filter', 'aria-label': 'Хайх', oninput: e => { filters[i] = e.target.value.trim().toLowerCase(); apply(); } })
       : null))));
   apply();
   return table;
 }
+const sortableTable = (attrs, ...kids) => enhanceTable(h('table', attrs, ...kids), { filter: false });
 
 // ---------- Ерөнхий хүснэгт + маягт ----------
 /*
@@ -464,18 +478,12 @@ async function crudSection(container, cfg) {
   // Мөр бүрт "Засах / Устгах" товч (тохиргооны хүснэгтүүдэд)
   // Гараар оруулдаг бүх хүснэгтэд мөр бүрт "Засах / Устгах" (тооцоолсон, зөвхөн харах хүснэгтэд — үгүй)
   const showActions = cfg.rowActions !== false && canWrite;
-  async function removeRow(r) {
-    if (!confirm('Энэ бичлэгийг устгах уу? Буцаах боломжгүй.')) return;
-    try { await api('DELETE', `/api/r/${cfg.res}/${r.id}`); toast('Устгалаа'); refresh(); }
-    catch (e) { toast(e.message, 'err'); }
-  }
   // Өөр бүртгэлээс автоматаар орсон мөр (r.auto) энд засагдахгүй — эх бүртгэл рүү очих товч (cfg.autoAction)
   // cfg.autoOpen(r, refresh): автомат мөр дээр дарахад (жишээ нь ачилт → борлуулалтын маягт) нээх үйлдэл
   const autoOpen = r => (canWrite && cfg.autoOpen ? () => cfg.autoOpen(r, refresh, canDel) : null);
   const actionCell = r => (r.auto ? h('td', { class: 'row-actions' }, cfg.autoAction?.(r, autoOpen(r), refresh)) : h('td', { class: 'row-actions' },
     cfg.extraAction?.(r, refresh) ?? null,
-    h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel); } }, 'Засах'),
-    canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeRow(r); } }, 'Устгах') : null));
+    h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel); } }, 'Засах')));
 
   const tbody = h('tbody'); const tfoot = h('tfoot'); const count = h('span', { class: 'muted small' });
   let thead = null;
@@ -1000,7 +1008,7 @@ function monthlyChart(data) {
     h('div', { class: 'legend' }, h('span', {}, h('i', { class: 'sw s1' }), 'Орлого'), h('span', {}, h('i', { class: 'sw s2' }), 'Зарлага')),
     wrap,
     h('details', { class: 'mchart-table' }, h('summary', {}, 'Хүснэгтээр харах'),
-      h('table', { class: 'data compact' },
+      sortableTable({ class: 'data compact' },
         h('thead', {}, h('tr', {}, ['Сар', 'Орлого', 'Зарлага', 'Ашиг'].map((t, i) => h('th', { class: i ? 'num' : null }, t)))),
         h('tbody', {}, data.map(d => h('tr', {}, h('td', {}, d.month), h('td', { class: 'num' }, FMT.money(d.revenue)),
           h('td', { class: 'num' }, FMT.money(d.expense)), h('td', { class: 'num' }, FMT.money(d.revenue - d.expense))))))));
@@ -1058,7 +1066,7 @@ PAGES.dashboard = async main => {
   const tasksCard = canMod('tasks') && d.upcomingTasks.length ? h('section', { class: 'card' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Ойрын ажил'), h('a', { class: 'btn ghost small', href: '#/tasks' }, 'Бүгдийг харах')),
     // Утсан дээр мөр бүр карт болж харагдана (data-label)
-    h('div', { class: 'table-wrap' }, h('table', { class: 'data' },
+    h('div', { class: 'table-wrap' }, sortableTable({ class: 'data' },
       h('thead', {}, h('tr', {}, ['Огноо', 'Ажил', 'Мал', 'Хариуцагч'].map(x => h('th', {}, x)))),
       h('tbody', {}, d.upcomingTasks.map(r => h('tr', { class: r.date < tday ? 'overdue-row' : r.date === tday ? 'today-row' : null },
         h('td', { 'data-label': 'Огноо' }, `${r.date} (${weekday(r.date)})`), h('td', { 'data-label': 'Ажил' }, r.type),
@@ -1130,16 +1138,16 @@ PAGES.dashboard = async main => {
     tasksCard,
     h('div', { class: 'grid2' },
       d.ready.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Борлуулахад бэлэн мал'), canMod('slaughter') ? h('a', { class: 'btn ghost small', href: '#/slaughter' }, 'Жагсаалт') : null),
-        h('table', { class: 'data compact' },
+        sortableTable({ class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'ID'), h('th', {}, 'Төрөл'), h('th', { class: 'num' }, 'Сүүлийн жин'), h('th', { class: 'num' }, 'Зорилт'))),
           h('tbody', {}, d.ready.map(a => h('tr', {}, h('td', {}, a.tag_id), h('td', {}, `${a.species} ${a.age_name ?? ''}`), h('td', { class: 'num' }, FMT.kg(a.last_weight)), h('td', { class: 'num' }, FMT.kg(a.target_weight))))))) : null,
       d.recentWeighings.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Сүүлийн жинлэлтүүд'), canMod('weighings') ? h('a', { class: 'btn ghost small', href: '#/weighings' }, 'Бүгд') : null),
-        h('table', { class: 'data compact' },
+        sortableTable({ class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', { class: 'num' }, 'Жин'))),
           h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null),
     d.partners.length ? h('section', { class: 'card' },
       h('div', { class: 'toolbar' }, h('h2', {}, 'Хөрөнгө оруулагчдын ашиг'), farmFull() ? h('a', { class: 'btn ghost small', href: '#/settings?tab=general' }, 'Удирдах') : null),
-      h('table', { class: 'data compact' },
+      sortableTable({ class: 'data compact' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', {}, 'Олгох давтамж'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Ашгийн дүн'))),
         h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name, investorState(p) !== 'Хүчинтэй' ? h('span', {}, ' ', badge(investorState(p))) : null),
           h('td', {}, p.payout_period || ''), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount))))))) : null);
@@ -1240,30 +1248,17 @@ PAGES.animals = main => {
   // Самбар: хүснэгтийн мэдээллийг нэгтгэсэн үзүүлэлтүүд (бүртгэл өөрчлөгдөхөд шинэчлэгдэнэ)
   const board = h('div', { class: 'kpis compact sl-board' });
   const listBox = h('div');
-  main.replaceChildren(board, listBox);
+  main.replaceChildren(foldableBoard(board, 'animals'), listBox);
   async function drawBoard() {
     const all = await api('GET', '/api/r/animals');
     const live = all.filter(a => a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон');
     const cnt = (list, k) => { const m = new Map(); for (const a of list) if (a[k]) m.set(a[k], (m.get(a[k]) || 0) + 1); return [...m].map(([n, c]) => `${n} ${c}`).join(' · '); };
-    const sum = (list, k) => list.reduce((s, a) => s + (Number(a[k]) || 0), 0);
-    const weighed = live.filter(a => a.last_weight != null);
-    const nowKg = sum(weighed, 'last_weight');
-    const startKg = sum(weighed, 'initial_weight');
-    const adgs = live.map(a => a.adg).filter(x => x != null);
-    const ready = live.filter(a => a.target_status === 'Борлуулах').length;
-    const notYet = live.filter(a => a.target_status === 'Хүрээгүй').length;
-    const by = s => all.filter(a => a.state === s).length;
     const kpi = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
       h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
     board.replaceChildren(
-      kpi('Идэвхтэй мал', `${live.length} толгой`, cnt(live, 'species') || null),
-      kpi('Хүйсээр', cnt(live, 'sex') || '—', 'Идэвхтэй мал'),
       kpi('Нийт бүртгэл', `${all.length} мал`, cnt(all, 'source') || null),
-      kpi('Одоогийн нийт жин', FMT.kg(nowKg), weighed.length ? `Анх ${FMT.kg(startKg)} · нэмэгдсэн ${FMT.kg(nowKg - startKg)}` : null),
-      kpi('Дундаж өдрийн өсөлт', adgs.length ? FMT.kg(adgs.reduce((s, x) => s + x, 0) / adgs.length) : '—', adgs.length ? `${adgs.length} малаар` : null),
-      kpi('Зорилтод хүрсэн', `${ready} толгой`, `Хүрээгүй ${notYet}`, ready ? 'pos' : ''),
-      kpi('Бойлсон · Зарагдсан', `${by('Бойлсон')} · ${by('Зарагдсан')}`, by('Бой товлогдсон') ? `Бой товлогдсон ${by('Бой товлогдсон')}` : null),
-      canMod('expenses', 1) ? kpi('Нийт авсан үнэ', FMT.money(sum(all, 'purchase_price')), null) : null);
+      kpi('Идэвхтэй мал', `${live.length} толгой`, cnt(live, 'species') || null),
+      kpi('Хүйсээр', cnt(live, 'sex') || '—', 'Идэвхтэй мал'));
   }
   cfg.onChange = async () => { await crudSection(listBox, cfg); drawBoard().catch(() => {}); };
   drawBoard().catch(() => {});
@@ -1320,7 +1315,7 @@ function fillGoalWeight(values, ctrls) {
 const WEIGHING_CFG = {
   res: 'weighings', module: 'weighings', photos: true, itemName: 'жинлэлт',
   fields: [
-    { k: 'date', label: 'Огноо', type: 'date', req: true, def: today, get max() { return today(); } },
+    { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
     { k: 'tag_id', label: 'Малын ID', req: true, readonly: true },
     { k: 'weight', label: 'Жин (кг)', type: 'number', req: true },
     { k: 'note', label: 'Тэмдэглэл', full: true }
@@ -1474,7 +1469,9 @@ PAGES.weighings = async main => {
   const canWeigh = a => canWrite && (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон');
   // "Жин бүртгэх" товч → жижиг цонх; хадгалмагц тухайн малын түүх нээгдэж шинэ жинлэлт харагдана
   function openWeigh(a) {
-    const date = h('input', { type: 'date', value: today(), min: a.purchase_date, max: [today(), a.slaughter_date].filter(Boolean).sort()[0], required: true });
+    // Огноо: сүүлийн жинлэлтээс өмнө байж болохгүй, бойлох өдрөөс хойш байж болохгүй
+    const minDate = [a.purchase_date, a.last_weigh_date].filter(Boolean).sort().pop();
+    const date = h('input', { type: 'date', value: [today(), minDate].sort().pop(), min: minDate, max: a.slaughter_date || null, required: true });
     const weight = numberInput({ required: true, placeholder: 'кг' });
     const note = h('input', { maxlength: 500 });
     const msg = h('div', { class: 'form-msg' });
@@ -1507,7 +1504,7 @@ PAGES.weighings = async main => {
 
   function detail(a) {
     const hist = history(a);
-    const histTable = h('table', { class: 'data compact weigh-hist' },
+    const histTable = sortableTable({ class: 'data compact weigh-hist' },
       h('thead', {}, h('tr', {}, ['Огноо', 'Жин', 'Өөрчлөлт', 'Хоног', 'Өдрийн өсөлт', 'Тэмдэглэл'].map((t, i) => h('th', { class: i && i < 5 ? 'num' : null }, t)),
         canWrite ? h('th') : null)),
       h('tbody', {},
@@ -1517,12 +1514,7 @@ PAGES.weighings = async main => {
           h('td', { class: 'num' }, w.days ?? ''), h('td', { class: 'num' }, w.adg != null ? FMT.kg(w.adg) : ''),
           h('td', {}, w.note ?? ''),
           canWrite ? h('td', { class: 'hist-actions' },
-            h('button', { type: 'button', class: 'btn ghost xs', onclick: e => { e.stopPropagation(); openForm(WEIGHING_CFG, { ...w, tag_id: a.tag_id }, reload, canDel); } }, 'Засах'),
-            canDel ? h('button', { type: 'button', class: 'btn danger xs', onclick: async e => {
-              e.stopPropagation();
-              if (!confirm(`${a.tag_id}: ${w.date}-ний жинлэлтийг устгах уу?`)) return;
-              try { await api('DELETE', `/api/r/weighings/${w.id}`); toast('Устгалаа'); reload(); } catch (ex) { toast(ex.message, 'err'); }
-            } }, 'Устгах') : null) : null)),
+            h('button', { type: 'button', class: 'btn ghost xs', onclick: e => { e.stopPropagation(); openForm(WEIGHING_CFG, { ...w, tag_id: a.tag_id }, reload, canDel); } }, 'Засах')) : null)),
         a.initial_weight != null ? h('tr', { class: 'muted' }, h('td', {}, a.purchase_date), h('td', { class: 'num' }, FMT.kg(a.initial_weight)),
           h('td', { colspan: 4 }, 'Анхны жин'), canWrite ? h('td') : null) : null,
         !hist.length && a.initial_weight == null ? h('tr', {}, h('td', { colspan: canWrite ? 7 : 6, class: 'empty' }, 'Жинлэлт алга')) : null));
@@ -1574,11 +1566,9 @@ PAGES.weighings = async main => {
       h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
     const sum = (l, k) => l.reduce((s, a) => s + (Number(a[k]) || 0), 0);
     const weighed = list.filter(a => a.last_weight != null);
-    const nowKg = sum(weighed, 'last_weight'), startKg = sum(weighed, 'initial_weight');
     const withAdg = list.filter(a => a.adg != null);
     const best = withAdg.reduce((b, a) => (!b || a.adg > b.adg ? a : b), null);
     const recs = list.flatMap(a => byAnimal.get(a.id) || []);
-    const lastDate = recs.map(w => w.date).sort().pop();
     const month = tday.slice(0, 7);
     const stale = list.filter(a => (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон')
       && dayDiffDays(a.last_weigh_date || a.purchase_date, tday) > 30);
@@ -1586,9 +1576,7 @@ PAGES.weighings = async main => {
     const ready = list.filter(a => a.target_status === 'Борлуулах').length;
     board.replaceChildren(
       kpi('Жинлэсэн мал', `${weighed.length} / ${list.length}`, list.length - weighed.length ? `Жинлээгүй ${list.length - weighed.length}` : 'Бүгд жинлэгдсэн'),
-      kpi('Одоогийн нийт жин', FMT.kg(nowKg), weighed.length ? `Анх ${FMT.kg(startKg)} · +${FMT.kg(nowKg - startKg)}` : null),
       kpi('Дундаж өдрийн өсөлт', withAdg.length ? FMT.kg(sum(withAdg, 'adg') / withAdg.length) : '—', best ? `Шилдэг ${best.tag_id} · ${FMT.kg(best.adg)}` : null),
-      kpi('Сүүлийн жинлэлт', lastDate || '—', lastDate ? `${recs.filter(w => w.date === lastDate).length} мал жинлэсэн` : null),
       kpi('Жинлэлтийн тоо', `${recs.length}`, `Энэ сард ${recs.filter(w => w.date.startsWith(month)).length}`),
       kpi('30+ хоног жинлээгүй', `${stale.length} мал`, stale.length ? stale.slice(0, 4).map(a => a.tag_id).join(', ') : null, stale.length ? 'neg' : ''),
       kpi('Өсөлт хангалтгүй', `${slow.length} мал`, 'Шаардлагатай өсөлтөөс бага', slow.length ? 'neg' : ''),
@@ -1598,7 +1586,7 @@ PAGES.weighings = async main => {
   const sel = (label, key, options) => h('select', { class: 'filter', onchange: e => { st[key] = e.target.value; draw(); } },
     h('option', { value: '' }, label + ': бүгд'), options.map(o => h('option', { value: o, selected: st[key] === o }, o)));
   await load();
-  main.replaceChildren(board, h('section', { class: 'card' },
+  main.replaceChildren(foldableBoard(board, 'weighings'), h('section', { class: 'card' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Жинлэлт'),
       h('div', { class: 'toolbar-right' },
         h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', value: st.q, oninput: e => { st.q = e.target.value.trim().toLowerCase(); draw(); } }),
@@ -1608,7 +1596,7 @@ PAGES.weighings = async main => {
           h('option', { value: 'live', selected: st.state === 'live' }, 'Идэвхтэй + бой товлогдсон'),
           ANIMAL_STATES.map(o => h('option', { value: o, selected: st.state === o }, o))),
         sel('Зорилт', 'target', ['Борлуулах', 'Хүрээгүй', 'Тохиргоо олдсонгүй']))),
-    h('div', { class: 'table-wrap' }, h('table', { class: 'data weigh-table' },
+    h('div', { class: 'table-wrap' }, sortableTable({ class: 'data weigh-table' },
       h('thead', {}, h('tr', {},
         h('th', {}, 'Малын ID'), h('th', {}, 'Төрөл'), h('th', {}, 'Насны нэршил'), h('th', { class: 'num' }, 'Анхны жин'),
         h('th', {}, 'Сүүлд жинлэсэн'), h('th', { class: 'num' }, 'Сүүлийн жин'), h('th', { class: 'num' }, 'Хоног'),
@@ -1629,12 +1617,31 @@ function fillFeedPrice(values, ctrls) {
   if (values.unit === 'боодол') { if (f.bale_kg) setFormValue(values, ctrls, 'unit_price', f.price * f.bale_kg); }
   else setFormValue(values, ctrls, 'unit_price', f.price);
 }
+// Цэсний самбарыг хураах/дэлгэх товч (цэс бүрийн сонголт энэ хөтөч дээр санагдана)
+function foldableBoard(board, key) {
+  const storeKey = 'tsf.boardFolded.' + key;
+  let folded = false;
+  try { folded = localStorage.getItem(storeKey) === '1'; } catch { /* */ }
+  const btn = h('button', { type: 'button', class: 'board-toggle', onclick: () => {
+    folded = !folded;
+    try { folded ? localStorage.setItem(storeKey, '1') : localStorage.removeItem(storeKey); } catch { /* */ }
+    sync();
+  } }, h('span', { class: 'board-chevron', 'aria-hidden': 'true' }));
+  const sync = () => {
+    board.hidden = folded;
+    btn.classList.toggle('folded', folded);
+    btn.setAttribute('aria-expanded', String(!folded));
+    btn.setAttribute('aria-label', folded ? 'Самбар дэлгэх' : 'Самбар хураах');
+  };
+  sync();
+  return h('div', { class: 'board-wrap' }, btn, board);
+}
 // Нягт самбарын карт ба самбартай хүснэгт (бүртгэл өөрчлөгдөхөд самбар шинэчлэгдэнэ)
 const kpiCard = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
   h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
 async function crudWithBoard(main, cfg, render) {
   const board = h('div', { class: 'kpis compact sl-board' }), box = h('div');
-  main.replaceChildren(board, box);
+  main.replaceChildren(foldableBoard(board, cfg.res), box);
   const upd = async () => {
     try { board.replaceChildren(...(await render(await api('GET', '/api/r/' + cfg.res))).filter(Boolean)); } catch { /* самбаргүй үлдэнэ */ }
   };
@@ -1869,11 +1876,11 @@ PAGES.slaughter = async main => {
       kpi('Гулууз хүлээгдэж буй', `${wait.length} толгой`, null, wait.length ? 'neg' : ''),
       kpi('Бойлсон', `${done.length} толгой`, done.length ? `Гулууз ${FMT.kg(kgSum(done, 'carcass_weight'))}` : null),
       kpi('Дундаж гарц', live ? FMT.pct(carc / live * 100) : '—', live ? `${FMT.kg(carc)} / ${FMT.kg(live)}` : null),
-      stock && !st.species ? kpi('Зарах боломжтой мах', FMT.kg(stock.available), `Нийт ${FMT.kg(stock.total)} · зарсан ${FMT.kg(stock.sold)}`, 'pos') : null);
+      stock && !st.species ? kpi('Зарах боломжтой мах', FMT.kg(stock.available), `Нийт ${FMT.kg(stock.total)} · зарсан ${FMT.kg(stock.sold)}`, 'pos') : '');
   }
 
   await load();
-  main.replaceChildren(board, h('section', { class: 'card' },
+  main.replaceChildren(foldableBoard(board, 'slaughter'), h('section', { class: 'card' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Бойны бүртгэл'),
       h('div', { class: 'toolbar-right' },
         h('input', { type: 'search', class: 'search', placeholder: 'Хайх…', value: st.q, oninput: e => { st.q = e.target.value.trim().toLowerCase(); draw(); } }),
@@ -1882,7 +1889,7 @@ PAGES.slaughter = async main => {
           SL_STAGES.map(s => h('option', { value: s, selected: st.stage === s }, s))),
         h('select', { class: 'filter', onchange: e => { st.species = e.target.value; draw(); } },
           h('option', { value: '' }, 'Төрөл: бүгд'), state.lk.species.map(s => h('option', { value: s, selected: st.species === s }, s))))),
-    h('div', { class: 'table-wrap' }, h('table', { class: 'data sl-table' },
+    h('div', { class: 'table-wrap' }, sortableTable({ class: 'data sl-table' },
       h('thead', {}, h('tr', {},
         ['Малын ID', 'Төрөл', 'Насны нэршил'].map(t => h('th', {}, t)),
         h('th', { class: 'num' }, 'Амьд жин'),
@@ -1956,14 +1963,7 @@ PAGES.tasks = async main => {
         h('td', {}, badge(r.status), r.status === 'Хийгдсэн' && r.done_date ? h('small', { class: 'muted' }, ' ' + r.done_date) : null),
         canWrite ? h('td', { class: 'row-actions' },
           r.status === 'Төлөвлөсөн' ? h('button', { type: 'button', class: 'btn primary small', onclick: e => { e.stopPropagation(); markDone(r); } }, '✓ Хийгдсэн') : null,
-          h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(TASK_CFG, r, reload, canDel); } }, 'Засах'),
-          canDel ? h('button', { type: 'button', class: 'btn danger small', onclick: e => { e.stopPropagation(); removeTask(r); } }, 'Устгах') : null) : null))))));
-  }
-
-  async function removeTask(r) {
-    if (!confirm(`"${r.type}" (${r.date}) ажлыг устгах уу?`)) return;
-    try { await api('DELETE', `/api/r/tasks/${r.id}`); toast('Устгалаа'); reload(); }
-    catch (e) { toast(e.message, 'err'); }
+          h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openForm(TASK_CFG, r, reload, canDel); } }, 'Засах')) : null))))));
   }
 
   const body = h('div', { class: 'task-groups' });
@@ -2395,7 +2395,7 @@ function permEditor(perms) {
         h('button', { type: 'button', class: 'btn ghost xs', onclick: () => setAll('view') }, 'Бүгд харах'),
         h('button', { type: 'button', class: 'btn ghost xs', onclick: () => setAll('edit') }, 'Бүгд засах'),
         h('button', { type: 'button', class: 'btn ghost xs', onclick: () => setAll('full') }, 'Бүгд бүрэн'))),
-    h('div', { class: 'table-wrap' }, h('table', { class: 'data compact perm-table' },
+    h('div', { class: 'table-wrap' }, sortableTable({ class: 'data compact perm-table' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Цэс'), h('th', {}, 'Эрх'))), h('tbody', {}, rows))));
   return { el, get: () => Object.fromEntries(Object.entries(selects).map(([m, sel]) => [m, sel.value])) };
 }
@@ -2479,12 +2479,7 @@ async function membersSettings(box) {
           h('td', {}, m.name, m.status !== 'approved' ? h('span', {}, ' ', badge(m.status, STATUS_LABEL[m.status])) : null),
           h('td', {}, m.phone), h('td', {}, permSummary(m.perms)), h('td', {}, FMT.dt(m.created_at)),
           h('td', { class: 'row-actions' },
-            h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openMember(m); } }, 'Засах'),
-            h('button', { type: 'button', class: 'btn danger small', onclick: async e => {
-              e.stopPropagation();
-              if (!confirm(`${m.name}-г энэ фермээс хасах уу?`)) return;
-              try { await api('DELETE', `/api/farms/${fid}/members/${m.user_id}`); toast('Хаслаа'); reload(); } catch (ex) { toast(ex.message, 'err'); }
-            } }, 'Устгах')))))))),
+            h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openMember(m); } }, 'Засах')))))))),
     h('div', { class: 'table-foot' }, h('span', { class: 'muted small' }, members.length + ' гишүүн'))));
 }
 
@@ -2520,20 +2515,53 @@ function locationFields(f, knownFarms = []) {
 }
 
 // Фермийн өнгө: сонгох өнгөнүүд ба сонгогч (фермүүдийг ялгаж харуулна)
-const FARM_COLORS = ['#2f6b3f', '#1f6feb', '#c2410c', '#7c3aed', '#be185d', '#0e7490', '#a16207', '#4b5563'];
+const FARM_BLACK = '#0f172a'; // Хар: маш бараан өнгөнд бүх сайт бараан загвартай
+const FARM_COLORS = ['#2f6b3f', '#1f6feb', '#c2410c', '#7c3aed', '#be185d', '#0e7490', '#a16207', '#4b5563', FARM_BLACK];
 const farmColor = f => f?.color || FARM_COLORS[0];
+// Гараар нэмсэн өнгөнүүд энэ хөтөч дээр хадгалагдана
+const FARM_COLORS_KEY = 'tsf.farmColors';
+function savedFarmColors() {
+  try {
+    const list = JSON.parse(localStorage.getItem(FARM_COLORS_KEY) || '[]');
+    return Array.isArray(list) ? list.filter(c => /^#[0-9a-f]{6}$/.test(c)) : [];
+  } catch { return []; }
+}
 function colorPicker(value) {
-  let cur = value || FARM_COLORS[0];
-  const sw = c => {
-    const b = h('button', { type: 'button', class: 'color-swatch' + (c === cur ? ' on' : ''), style: `--c:${c}`, 'aria-label': c, title: c,
-      onclick: () => { cur = c; el.querySelectorAll('.color-swatch').forEach(x => x.classList.toggle('on', x === b)); } });
-    return b;
-  };
-  const el = h('div', { class: 'color-picker', role: 'group', 'aria-label': 'Фермийн өнгө' }, FARM_COLORS.map(sw));
+  // cur = null — өнгө сонгоогүй: сайтын анхны загвар
+  let cur = value ? String(value).toLowerCase() : null;
+  let added = savedFarmColors();
+  const el = h('div', { class: 'color-picker', role: 'group', 'aria-label': 'Фермийн өнгө' });
+  const sw = c => h('button', { type: 'button', class: 'color-swatch' + (c === cur ? ' on' : ''), style: `--c:${c}`, 'aria-label': c, title: c,
+    onclick: () => { cur = c; draw(); } });
+  // "+" дарахад өнгө сонгогч нээгдэж, сонгосон өнгө жагсаалтад нэмэгдэнэ
+  const input = h('input', { type: 'color', 'aria-label': 'Өнгө нэмэх', value: cur || FARM_COLORS[0], onchange: e => {
+    cur = e.target.value.toLowerCase();
+    if (!FARM_COLORS.includes(cur)) {
+      added = [...added.filter(c => c !== cur), cur].slice(-12);
+      try { localStorage.setItem(FARM_COLORS_KEY, JSON.stringify(added)); } catch { /* */ }
+    }
+    draw();
+  } });
+  const add = h('label', { class: 'color-swatch color-add' }, h('span', { 'aria-hidden': 'true' }, '+'), input);
+  const draw = () => el.replaceChildren(...[...new Set([...FARM_COLORS, ...added, cur])].filter(Boolean).map(sw), add,
+    h('button', { type: 'button', class: 'btn ghost xs color-reset', disabled: !cur, onclick: () => { cur = null; draw(); } }, 'Анхны өнгө'));
+  draw();
   return { el, get: () => cur };
 }
-// Сонгосон фермийн өнгийг бүх хуудсанд (--farm) тавина
-const applyFarmColor = () => document.documentElement.style.setProperty('--farm', farmColor(state.lk?.farm));
+// Өнгөний гэрэлтэлт (0 — хар, 1 — цагаан): маш бараан/цайвар өнгөнд загварыг тааруулна
+const colorLum = hex => {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(v => (v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4));
+  return .2126 * r + .7152 * g + .0722 * b;
+};
+// Сонгосон фермийн өнгөөр бүх сайтын загварыг өөрчилнө (ферм сонгоогүй үед анхны загвар)
+function applyFarmColor(farm = state.lk?.farm) {
+  const root = document.documentElement;
+  if (farm) root.style.setProperty('--farm', farmColor(farm)); else root.style.removeProperty('--farm');
+  const lum = farm?.color ? colorLum(farm.color) : null;
+  if (lum != null) root.dataset.farmTheme = lum < .02 ? 'dark' : 'color';
+  else delete root.dataset.farmTheme;
+  root.toggleAttribute('data-farm-light', lum != null && lum > .4);
+}
 
 function generalSettings(box) {
   const farm = state.lk.farm;
@@ -2561,8 +2589,20 @@ function generalSettings(box) {
       h('div', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн өнгө'), color.el),
       ...loc.els,
       h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
-    msg, h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))),
+    msg, h('div', { class: 'form-actions' },
+      farm.full ? h('button', { class: 'btn danger', type: 'button', onclick: removeFarm }, 'Фермийг устгах') : null,
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))),
     investorsBox);
+  async function removeFarm() {
+    const typed = prompt(`"${farm.name}" фермийг түүний БҮХ бүртгэл (мал, жинлэлт, зардал, зураг…)-тэй нь хамт устгана. Буцаах боломжгүй.\n\nБаталгаажуулахын тулд фермийн нэрийг бичнэ үү:`);
+    if (typed == null) return;
+    if (typed.trim() !== farm.name) { toast('Фермийн нэр таарсангүй', 'err'); return; }
+    try {
+      await api('DELETE', `/api/farms/${farm.id}`);
+      setFarm(null); toast('Ферм устгагдлаа'); location.hash = '#/farms';
+    } catch (e) { toast(e.message, 'err'); }
+  }
   crudSection(investorsBox, INVESTOR_CFG()).catch(e => investorsBox.replaceChildren(h('div', { class: 'card error-card' }, e.message)));
 }
 
@@ -2669,14 +2709,8 @@ PAGES.users = async main => {
   // Хүлээгдэж буй хэрэглэгчийн мөрийн төгсгөлд: эрх сонгох + Батлах / Татгалзах
   const approveCell = u => {
     if (u.status !== 'pending') {
-      const self = u.id === state.user.id;
       return h('td', { class: 'row-actions' },
-        h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); editUser(u); } }, 'Засах'),
-        !self ? h('button', { type: 'button', class: 'btn danger small', onclick: async e => {
-          e.stopPropagation();
-          if (!confirm(`${u.name} (${u.phone}) хэрэглэгчийг бүр мөсөн устгах уу?`)) return;
-          try { await api('DELETE', `/api/admin/users/${u.id}`); toast('Устгалаа'); reload(); } catch (ex) { toast(ex.message, 'err'); }
-        } }, 'Устгах') : null);
+        h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); editUser(u); } }, 'Засах'));
     }
     const role = roleSelect('viewer');
     const stop = e => e.stopPropagation();
@@ -2710,13 +2744,14 @@ PAGES.farms = async main => {
   const reload = () => render();
   const enter = f => { setFarm(f.id); location.hash = '#/dashboard'; };
 
-  function farmForm(f) {
-    const name = h('input', { maxlength: 100, required: true, value: f?.name || '' });
-    const note = h('textarea', { rows: 2, maxlength: 500 }); note.value = f?.note || '';
-    // Шинэ ферм: бусад фермд ашиглаагүй эхний өнгийг санал болгоно
+  // Шинэ ферм үүсгэх (нэр, өнгө, байршлыг дараа нь Тохиргоо → Ерөнхий-өөс засна)
+  function farmForm() {
+    const name = h('input', { maxlength: 100, required: true });
+    const note = h('textarea', { rows: 2, maxlength: 500 });
+    // Бусад фермд ашиглаагүй эхний өнгийг санал болгоно
     const used = new Set(farms.map(x => x.color).filter(Boolean));
-    const color = colorPicker(f?.color || FARM_COLORS.find(c => !used.has(c)) || FARM_COLORS[0]);
-    const loc = locationFields(f, farms);
+    const color = colorPicker(FARM_COLORS.find(c => !used.has(c)) || FARM_COLORS[0]);
+    const loc = locationFields(null, farms);
     // Анхдагч: Excel-ийн загвар тохиргоо; эсвэл өөр фермээс хуулах; эсвэл хоосон
     const copy = h('select', {},
       h('option', { value: 'template', selected: true }, 'Загвар тохиргоо (Excel)'),
@@ -2729,38 +2764,27 @@ PAGES.farms = async main => {
         h('div', { class: 'field full' }, h('span', { class: 'field-label' }, 'Фермийн өнгө'), color.el),
         ...loc.els,
         h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note),
-        !f ? h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тохиргоо'), copy) : null),
+        h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тохиргоо'), copy)),
       msg,
-      h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+      h('div', { class: 'modal-actions' },
+        h('span', { class: 'spacer' }),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
-        h('button', { class: 'btn primary', type: 'submit' }, f ? 'Хадгалах' : 'Үүсгэх')));
+        h('button', { class: 'btn primary', type: 'submit' }, 'Үүсгэх')));
     form.addEventListener('submit', async e => {
       e.preventDefault();
       try {
-        if (f && !confirmSave()) return;
-        if (f) { await api('PATCH', `/api/farms/${f.id}`, { name: name.value, note: note.value, color: color.get(), ...loc.get() }); if (f.id === state.farmId) { await loadLookups(); applyFarmColor(); } dlg.close(); toast('Хадгаллаа'); reload(); }
-        else {
-          const r = await api('POST', '/api/farms', { name: name.value, note: note.value, color: color.get(), ...loc.get(), copy_from: copy.value || null });
-          dlg.close(); toast('Ферм үүслээ'); enter({ id: r.id });
-        }
+        const r = await api('POST', '/api/farms', { name: name.value, note: note.value, color: color.get(), ...loc.get(), copy_from: copy.value || null });
+        dlg.close(); toast('Ферм үүслээ'); enter({ id: r.id });
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
     });
-    const dlg = modal(f ? 'Ферм засах' : 'Шинэ ферм', form);
+    const dlg = modal('Шинэ ферм', form);
     name.focus();
   }
 
-  async function removeFarm(f) {
-    const typed = prompt(`"${f.name}" фермийг түүний БҮХ бүртгэл (мал, жинлэлт, зардал, зураг…)-тэй нь хамт устгана. Буцаах боломжгүй.\n\nБаталгаажуулахын тулд фермийн нэрийг бичнэ үү:`);
-    if (typed == null) return;
-    if (typed.trim() !== f.name) { toast('Фермийн нэр таарсангүй', 'err'); return; }
-    try {
-      await api('DELETE', `/api/farms/${f.id}`);
-      if (state.farmId === f.id) setFarm(null);
-      toast('Ферм устгагдлаа'); reload();
-    } catch (e) { toast(e.message, 'err'); }
-  }
-
-  const card = f => h('div', { class: 'farm-card' + (f.id === state.farmId ? ' current' : ''), style: `--fc:${farmColor(f)}` },
+  // Фермийн карт: дарахад тухайн ферм рүү шууд орно
+  const card = f => h('div', { class: 'farm-card' + (f.id === state.farmId ? ' current' : ''), style: `--fc:${farmColor(f)}`, role: 'button', tabindex: '0',
+    onclick: () => enter(f),
+    onkeydown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enter(f); } } },
     h('div', { class: 'farm-card-head' },
       h('h3', {}, h('span', { class: 'farm-dot', 'aria-hidden': 'true' }), f.name),
       f.id === state.farmId ? badge('approved', 'Сонгосон') : null),
@@ -2770,12 +2794,7 @@ PAGES.farms = async main => {
     h('div', { class: 'farm-stats' },
       h('span', {}, h('strong', {}, f.active_animals), ' идэвхтэй мал'),
       f.can_manage && f.member_count ? h('span', {}, h('strong', {}, f.member_count), ' гишүүн') : null,
-      f.tasks_due ? h('span', { class: 'warn' }, h('strong', {}, f.tasks_due), ' ажил хүлээгдэж байна') : null),
-    h('div', { class: 'farm-actions' },
-      h('button', { class: 'btn primary', type: 'button', onclick: () => enter(f) }, 'Орох →'),
-      h('span', { class: 'spacer' }),
-      f.can_manage ? h('button', { class: 'btn ghost small', type: 'button', onclick: () => farmForm(f) }, 'Засах') : null,
-      f.can_manage ? h('button', { class: 'btn danger small', type: 'button', onclick: () => removeFarm(f) }, 'Устгах') : null));
+      f.tasks_due ? h('span', { class: 'warn' }, h('strong', {}, f.tasks_due), ' ажил хүлээгдэж байна') : null));
 
   const mine = farms.filter(f => f.mine), shared = farms.filter(f => f.shared), others = farms.filter(f => !f.mine && !f.shared);
   fill(main,
@@ -2836,12 +2855,7 @@ PAGES.news = async main => {
         h('td', {}, n.published ? badge('approved', 'Нийтэлсэн') : badge('Цуцалсан', 'Ноорог')),
         h('td', {}, n.author || ''),
         h('td', { class: 'row-actions' },
-          h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openNews(n); } }, 'Засах'),
-          h('button', { type: 'button', class: 'btn danger small', onclick: async e => {
-            e.stopPropagation();
-            if (!confirm(`"${n.title}" мэдээг устгах уу?`)) return;
-            try { await api('DELETE', `/api/admin/news/${n.id}`); toast('Устгалаа'); reload(); } catch (ex) { toast(ex.message, 'err'); }
-          } }, 'Устгах')))) : h('tr', {}, h('td', { colspan: 5, class: 'empty' }, 'Мэдээ алга'))))))));
+          h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openNews(n); } }, 'Засах')))) : h('tr', {}, h('td', { colspan: 5, class: 'empty' }, 'Мэдээ алга'))))))));
 };
 
 PAGES.audit = async main => {

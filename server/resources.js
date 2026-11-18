@@ -129,10 +129,14 @@ async function resolveTag(v, db, farmId) {
 }
 
 // Огнооны дараалал шалгана: авсан өдөр ≤ жинлэлт ≤ бойлох өдөр ≤ ачигдсан огноо
-async function checkWeighing(v, db, farmId) {
+async function checkWeighing(v, db, farmId, id) {
   const a = await resolveTag(v, db, farmId);
   if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
-  if (v.date > todayStr()) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) ирээдүйд байж болохгүй`);
+  // Шинэ жинлэлт сүүлийн жинлэлтээс өмнө байж болохгүй (хуучин жинлэлтийг засахад хамаарахгүй)
+  if (!id) {
+    const prev = (await db.one('SELECT MAX(date) d FROM weighings WHERE animal_id = ?', [a.id])).d;
+    if (prev && v.date < prev) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) сүүлийн жинлэлтээс (${prev}) өмнө байж болохгүй`);
+  }
   const s = await db.one('SELECT date FROM slaughters WHERE animal_id = ?', [a.id]);
   if (s && v.date > s.date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) бойлох өдрөөс (${s.date}) хойш байж болохгүй`);
   const ls = await liveSale(db, a.id);
