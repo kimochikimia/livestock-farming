@@ -332,6 +332,8 @@ const resources = {
 
   expenses: {
     table: 'expenses', title: 'Зардал', track: true, photos: true, describe: v => (v.feed_name ? `${v.type} · ${v.feed_name}` : v.type),
+    // Худалдаж авсан тэжээлийг "Тэжээлийн бүртгэл"-ээс бүртгэнэ — тэжээлийн эрхтэй хэрэглэгч ч нэмж чадна
+    createModules: body => (body?.type === FEED_TYPE ? ['expenses', 'feed'] : null),
     fields: {
       date: { t: 'date', req: true, label: 'Огноо' },
       type: { t: 'text', req: true, max: 100, label: 'Төрөл' },

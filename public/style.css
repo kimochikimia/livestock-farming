@@ -675,8 +675,6 @@ dialog.modal { overflow-y: auto; overscroll-behavior: contain; }
   table.data:not(.compact) table.weigh-hist td::before { content: none; }
   table.data:not(.compact) table.weigh-hist td:empty { display: table-cell; }
 }
-.weigh-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
-@media (max-width: 640px) { .weigh-actions { flex-wrap: wrap; } .weigh-actions > .btn.primary { flex: 1 1 100%; } }
 @media (min-width: 641px) {
   /* Жинлэлтийн хүснэгт олон баганатай — нарийсгаж "Жин бүртгэх" товчийг дэлгэцэнд багтаана */
   .weigh-table > thead > tr > th, .weigh-table > tbody > tr > td, .weigh-table > tfoot > tr > td { padding-left: 7px; padding-right: 7px; }
@@ -716,7 +714,7 @@ table.data td.wrap-cell { white-space: normal; min-width: 80px; max-width: 160px
 table.data td.wrap-cell.wide { min-width: 140px; max-width: 260px; }
 /* Хүснэгтийн мөр дээрх үйлдлийн товч (Засах, Устгах, + Тээвэр, Жин бүртгэх г.м.) — компьютер дээр жижиг */
 @media (min-width: 901px) {
-  td.row-actions .btn, .weigh-actions .btn { padding: 3px 9px; font-size: 12px; line-height: 1.4; border-radius: 6px; min-height: 0; }
+  td.row-actions .btn { padding: 3px 9px; font-size: 12px; line-height: 1.4; border-radius: 6px; min-height: 0; }
   td.row-actions .btn + .btn { margin-left: 4px; }
   td.row-actions { padding-top: 4px; padding-bottom: 4px; }
 }
@@ -809,3 +807,16 @@ html[data-farm-theme="color"][data-farm-light] .btn.primary { background: var(--
 .color-picker { align-items: center; }
 .color-reset { margin-left: 4px; }
 .color-reset:disabled { opacity: .5; cursor: default; }
+/* Маягтын эхний бүлгийн гарчиг дээр зураасгүй */
+.form-grid > .form-section:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+/* Маягтад гурав зэрэгцсэн талбар (.third); бусад нь хагас өргөнтэй хэвээр */
+@media (min-width: 561px) {
+  .form-grid:has(> .third) { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .form-grid:has(> .third) > * { grid-column: span 3; }
+  .form-grid:has(> .third) > .third { grid-column: span 2; }
+  .form-grid:has(> .third) > .full { grid-column: 1 / -1; }
+}
+/* Зэрэгцсэн талбар дахь зургийн хэсэг: товч нь оролтын талбартай ижил түвшин, өндөртэй */
+.photo-panel.third { gap: 4px; }
+.photo-panel.third .photo-status:empty { display: none; }
+.photo-panel.third .photo-actions .btn { flex: 1 1 100%; height: 37px; min-width: 0; padding-left: 6px; padding-right: 6px; }

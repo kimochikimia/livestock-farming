@@ -230,6 +230,8 @@ async function init() {
   await ensureColumn('partners', 'user_id', 'INT NULL');
   // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
+  // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг
+  await ensureColumn('photos', 'kind', 'VARCHAR(10) NULL');
   await ensureColumn('slaughters', 'planned_date', 'DATE NULL');
   await ensureColumn('slaughters', 'slaughtered_date', 'DATE NULL');
   await pool.query('UPDATE slaughters SET planned_date = date WHERE planned_date IS NULL');

@@ -649,8 +649,8 @@ const confirmSave = (changes = []) =>
 function openForm(cfg, row, onDone, canDel, init) {
   const isEdit = !!row;
   if (isEdit && cfg.fields.some(f => f.createOnly)) cfg = { ...cfg, fields: cfg.fields.filter(f => !f.createOnly) };
-  // "section" = гарчиг, "info" = автоматаар тооцоолсон утга (илгээгдэхгүй)
-  const DISPLAY = new Set(['section', 'info']);
+  // "section" = гарчиг, "info" = автоматаар тооцоолсон утга, "photos" = зургийн хэсэг (илгээгдэхгүй)
+  const DISPLAY = new Set(['section', 'info', 'photos']);
   const inputs = cfg.fields.filter(f => !DISPLAY.has(f.type));
   const values = {};
   for (const f of inputs) {
@@ -732,8 +732,15 @@ function openForm(cfg, row, onDone, canDel, init) {
   }
 
   const grid = h('div', { class: 'form-grid' });
+  const panels = [];
   for (const f of cfg.fields) {
     if (f.type === 'section') { grid.append(h('div', { class: 'form-section full' }, f.label)); continue; }
+    if (f.type === 'photos') {
+      const p = photoPanel(cfg.res, row?.id, f);
+      if (f.third) p.el.classList.replace('full', 'third');
+      panels.push(p); grid.append(p.el);
+      continue;
+    }
     if (f.type === 'info') {
       const el = h('span', { class: 'info-value' });
       infos.push({ f, el });
@@ -747,12 +754,13 @@ function openForm(cfg, row, onDone, canDel, init) {
       : field(f.label + (f.req ? ' *' : ''), ctrls[f.k], f.help);
     wrappers[f.k] = lab;
     if (f.full) lab.classList.add('full');
+    if (f.third) lab.classList.add('third');
     grid.append(lab);
   }
   refreshInfo();
 
-  const photos = cfg.photos ? photoPanel(cfg.res, row?.id) : null;
-  if (photos) grid.append(photos.el);
+  // Маягтад зургийн хэсэг заагаагүй бол төгсгөлд нэг ерөнхий хэсэг
+  if (cfg.photos && !panels.length) { const p = photoPanel(cfg.res, row?.id); panels.push(p); grid.append(p.el); }
   let saved = false;
 
   const save = h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах');
@@ -768,6 +776,9 @@ function openForm(cfg, row, onDone, canDel, init) {
     for (const f of inputs) values[f.k] = ctrls[f.k].value;
     const body = {};
     for (const f of inputs) if (!f.virtual) body[f.k] = values[f.k] === '' || (f.showIf && !f.showIf(values)) ? null : values[f.k];
+    Object.assign(body, cfg.fixed); // Маягтад харагдахгүй тогтмол утгууд
+    const invalid = cfg.validate?.(body, row);
+    if (invalid) { err.className = 'form-msg err'; err.textContent = invalid; return; }
     // Засварыг хадгалахаас өмнө өөрчлөгдсөн талбаруудыг харуулж баталгаажуулна (санамсаргүй засвараас сэргийлнэ)
     if (isEdit) {
       const norm = x => (x == null ? '' : String(x).trim());
@@ -787,7 +798,7 @@ function openForm(cfg, row, onDone, canDel, init) {
       if (isEdit) await api('PUT', `/api/r/${cfg.res}/${row.id}`, body);
       else {
         const r = await api('POST', `/api/r/${cfg.res}`, body);
-        if (photos) { save.textContent = 'Зураг хуулж байна…'; await photos.flush(r.id); }
+        if (panels.length) { save.textContent = 'Зураг хуулж байна…'; for (const p of panels) await p.flush(r.id); }
       }
       saved = true; dlg.close(); toast('Хадгаллаа'); onDone();
     } catch (ex) { err.className = 'form-msg err'; err.textContent = ex.message; save.disabled = false; save.textContent = 'Хадгалах'; }
@@ -798,7 +809,7 @@ function openForm(cfg, row, onDone, canDel, init) {
     catch (ex) { err.className = 'form-msg err'; err.textContent = ex.message; }
   }
   const dlg = modal((isEdit ? 'Засах: ' : 'Шинэ: ') + (cfg.itemName || cfg.title || ''), form);
-  dlg.addEventListener('close', () => { photos?.dispose(); if (!saved && photos?.changed) onDone(); });
+  dlg.addEventListener('close', () => { panels.forEach(p => p.dispose()); if (!saved && panels.some(p => p.changed)) onDone(); });
 }
 
 // ---------- Зураг ----------
@@ -820,10 +831,10 @@ async function compressImage(file, max = 1600, quality = 0.82) {
   throw new Error('Энэ зургийн төрлийг уншиж чадсангүй');
 }
 
-async function uploadPhoto(res, id, file) {
+async function uploadPhoto(res, id, file, kind) {
   const blob = await compressImage(file);
   let r;
-  try { r = await fetch(`/api/photos/${res}/${id}`, { method: 'POST', headers: { 'Content-Type': blob.type || 'image/jpeg', 'X-Farm-Id': String(state.farmId) }, body: blob, credentials: 'same-origin' }); }
+  try { r = await fetch(`/api/photos/${res}/${id}${kind ? `?kind=${kind}` : ''}`, { method: 'POST', headers: { 'Content-Type': blob.type || 'image/jpeg', 'X-Farm-Id': String(state.farmId) }, body: blob, credentials: 'same-origin' }); }
   catch { throw new Error('Зураг илгээж чадсангүй'); }
   if (!r.ok) { let d = null; try { d = await r.json(); } catch { /* */ } throw new Error(d?.error || 'Зураг илгээж чадсангүй'); }
 }
@@ -859,22 +870,20 @@ async function openRecordPhotos(res, id) {
   } catch (e) { toast(e.message, 'err'); }
 }
 
-function photoPanel(res, recordId) {
+// kind: 'tag' — ээмгийн зураг; өгөөгүй бол үндсэн зураг
+function photoPanel(res, recordId, { kind, label = 'Зураг' } = {}) {
   let currentId = recordId || null;
   let existing = [];
   let changed = false;
   const pending = [];
   const grid = h('div', { class: 'photo-grid' });
   const status = h('span', { class: 'photo-status' });
-  const mkInput = capture => {
-    const inp = h('input', { type: 'file', accept: 'image/*', multiple: capture ? null : true, capture: capture ? 'environment' : null, class: 'visually-hidden', tabindex: '-1' });
-    inp.addEventListener('change', () => { const files = [...inp.files]; inp.value = ''; add(files); });
-    return inp;
-  };
-  const pick = mkInput(false), cam = mkInput(true);
+  // Утсан дээр энэ сонголт зургийн сан ба камерыг хоёуланг нь санал болгоно
+  const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', tabindex: '-1' });
+  pick.addEventListener('change', () => { const files = [...pick.files]; pick.value = ''; add(files); });
 
   async function load() {
-    if (currentId) existing = await api('GET', `/api/photos/${res}/${currentId}`);
+    if (currentId) existing = await api('GET', `/api/photos/${res}/${currentId}${kind ? `?kind=${kind}` : ''}`);
     draw();
   }
   async function add(files) {
@@ -886,7 +895,7 @@ function photoPanel(res, recordId) {
     }
     for (const [n, f] of imgs.entries()) {
       status.textContent = `Хуулж байна… ${n + 1}/${imgs.length}`;
-      try { await uploadPhoto(res, currentId, f); changed = true; } catch (e) { toast(e.message, 'err'); }
+      try { await uploadPhoto(res, currentId, f, kind); changed = true; } catch (e) { toast(e.message, 'err'); }
     }
     status.textContent = '';
     await load();
@@ -905,13 +914,12 @@ function photoPanel(res, recordId) {
   }
 
   const el = h('div', { class: 'photo-panel full' },
-    h('span', { class: 'field-label' }, 'Зураг'),
+    h('span', { class: 'field-label' }, label),
     grid,
     h('div', { class: 'photo-actions' },
       h('button', { type: 'button', class: 'btn ghost small', onclick: () => pick.click() }, '🖼 Зураг оруулах'),
-      h('button', { type: 'button', class: 'btn ghost small', onclick: () => cam.click() }, '📷 Зураг авах'),
       status),
-    pick, cam);
+    pick);
   load().catch(e => toast(e.message, 'err'));
 
   return {
@@ -919,7 +927,7 @@ function photoPanel(res, recordId) {
     get changed() { return changed; },
     async flush(newId) {
       currentId = newId;
-      for (const p of pending) await uploadPhoto(res, newId, p.file);
+      for (const p of pending) await uploadPhoto(res, newId, p.file, kind);
     },
     dispose() { for (const p of pending) URL.revokeObjectURL(p.url); }
   };
@@ -1181,12 +1189,15 @@ PAGES.animals = main => {
     { k: 'state', label: 'Төлөв', options: ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан'] }
   ],
   fields: [
+    { k: '_income', type: 'section', label: 'Орлого' },
     // Эхлээд орлогын төрөл: Худалдаж авсан / Төл / Бэлэг — доорх талбарууд үүнээс хамаарна
-    { k: 'source', label: 'Орлогын төрөл', type: 'select', req: true, full: true, def: 'Худалдаж авсан',
+    { k: 'source', label: 'Орлогын төрөл', type: 'select', req: true, third: true, def: 'Худалдаж авсан',
       options: () => opt(ANIMAL_SOURCES), onChange: fillCalf },
-    { k: 'purchase_date', label: 'Орлогын огноо', type: 'date', req: true, def: today },
-    { k: 'tag_id', label: 'Малын ID', req: true, maxlength: 50 },
-    { k: 'tag_color', label: 'ID өнгө', type: 'select', options: () => opt(state.lk.suggest.tagColor) },
+    { k: 'purchase_date', label: 'Орлогын огноо', type: 'date', req: true, third: true, def: today },
+    { k: 'purchase_price', label: 'Авсан үнэ ₮', type: 'number', third: true, showIf: v => v.source === 'Худалдаж авсан' },
+    { k: 'market_value', label: 'Зах зээлийн үнэ ₮', type: 'number', third: true, showIf: v => v.source === 'Бэлэг' },
+    { k: '_animal', type: 'section', label: 'Мал' },
+    { k: '_animal_photos', type: 'photos', label: 'Малын зураг' },
     { k: 'species', label: 'Малын төрөл', type: 'select', req: true, options: () => opt(state.lk.species), onChange: fillCalf },
     // Эх мал: эм (эсвэл хүйс бүртгээгүй) мал; төрөл сонгосон бол тэр төрлийнх. Сонгоход малын төрлийг бөглөнө
     { k: 'mother_tag', label: 'Эх мал (ID) *', type: 'select', dependsOn: 'species', keepOnChange: true,
@@ -1201,9 +1212,11 @@ PAGES.animals = main => {
     { k: 'age', label: 'Нас (авах үед)', maxlength: 10, suggest: v => state.lk.classes.filter(c => c.species === v.species).map(c => c.age) },
     { k: 'sex', label: 'Хүйс', type: 'select', options: () => opt(state.lk.sexes), onChange: (v, c) => { fillCalf(v, c); fillGoalWeight(v, c); } },
     { k: 'initial_weight', label: 'Анхны жин (кг)', type: 'number' },
-    { k: 'purchase_price', label: 'Авсан үнэ ₮', type: 'number', showIf: v => v.source === 'Худалдаж авсан' },
-    { k: 'market_value', label: 'Зах зээлийн үнэ ₮', type: 'number', showIf: v => v.source === 'Бэлэг' },
     { k: 'note', label: 'Тэмдэглэл', type: 'textarea', full: true },
+    { k: '_tag', type: 'section', label: 'Ээмэг' },
+    { k: '_tag_photos', type: 'photos', kind: 'tag', label: 'Ээмгийн зураг', third: true },
+    { k: 'tag_id', label: 'Малын ID', req: true, maxlength: 50, third: true },
+    { k: 'tag_color', label: 'ID өнгө', type: 'select', third: true, options: () => opt(state.lk.suggest.tagColor) },
     { k: '_goal', type: 'section', label: 'Зорилт' },
     { k: 'goal_weight', label: 'Зорилтот жин (кг)', type: 'number' },
     { k: 'goal_days', label: 'Хугацаа (хоног)', type: 'number', min: 1 },
@@ -1443,7 +1456,7 @@ PAGES.weighings = async main => {
   let animals = [], byAnimal = new Map();
   const tbody = h('tbody'), tfoot = h('tfoot');
   const count = h('span', { class: 'muted small' });
-  const COLS = 13;
+  const COLS = 12;
 
   async function load() {
     const [a, w] = await Promise.all([api('GET', '/api/r/animals'), api('GET', '/api/r/weighings')]);
@@ -1466,22 +1479,44 @@ PAGES.weighings = async main => {
     }).reverse();
   }
 
-  const canWeigh = a => canWrite && (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон');
-  // "Жин бүртгэх" товч → жижиг цонх; хадгалмагц тухайн малын түүх нээгдэж шинэ жинлэлт харагдана
-  function openWeigh(a) {
-    // Огноо: сүүлийн жинлэлтээс өмнө байж болохгүй, бойлох өдрөөс хойш байж болохгүй
-    const minDate = [a.purchase_date, a.last_weigh_date].filter(Boolean).sort().pop();
-    const date = h('input', { type: 'date', value: [today(), minDate].sort().pop(), min: minDate, max: a.slaughter_date || null, required: true });
-    const weight = numberInput({ required: true, placeholder: 'кг' });
-    const note = h('input', { maxlength: 500 });
-    const msg = h('div', { class: 'form-msg' });
+  const canWeigh = a => a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон';
+  // "+ Жин бүртгэх": эхлээд малаа дугаараар нь хайж сонгоно, дараа нь жингийн мэдээлэл
+  function openWeigh() {
+    const pool = animals.filter(canWeigh).sort((x, y) => String(x.tag_id).localeCompare(String(y.tag_id), undefined, { numeric: true }));
+    const labelOf = x => `${x.tag_id}${x.tag_color ? ` (${x.tag_color})` : ''} · ${x.species} ${x.current_age_name ?? ''}`.trim();
+    let a = null;
+    const picker = h('input', { class: 'combo-input', required: true, autocomplete: 'off', maxlength: 120 });
+    combo(picker, () => pool.map(labelOf));
+    const date = h('input', { type: 'date', value: today(), required: true, disabled: true });
+    const weight = numberInput({ required: true, placeholder: 'кг', disabled: true });
+    const note = h('input', { maxlength: 500, disabled: true });
+    const msg = h('div', { class: 'form-msg' + (pool.length ? '' : ' err') }, pool.length ? '' : 'Жинлэх мал алга');
     const save = h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах');
     const info = (k, v) => h('div', { class: 'kv' }, h('span', {}, k), h('span', {}, v ?? '—'));
-    const form = h('form', { class: 'modal-body' },
-      h('div', { class: 'kv-grid sched-info' },
-        info('Малын ID', a.tag_id + (a.tag_color ? ` (${a.tag_color})` : '')),
+    const infoBox = h('div', { class: 'kv-grid sched-info one-col', hidden: true });
+    const select = () => {
+      const v = picker.value.trim().toLowerCase();
+      const next = pool.find(x => labelOf(x).toLowerCase() === v || String(x.tag_id).toLowerCase() === v) || null;
+      if (next === a) return;
+      a = next;
+      infoBox.hidden = !a;
+      infoBox.replaceChildren(...(a ? [
         info('Төрөл · нэршил', `${a.species} · ${a.current_age_name ?? ''}`),
-        info('Сүүлийн жин', a.last_weight != null ? `${FMT.kg(a.last_weight)} (${a.last_weigh_date})` : a.initial_weight != null ? `${FMT.kg(a.initial_weight)} (анхны)` : null)),
+        info('Сүүлийн жин', a.last_weight != null ? `${FMT.kg(a.last_weight)} (${a.last_weigh_date})` : a.initial_weight != null ? `${FMT.kg(a.initial_weight)} (анхны)` : null)] : []));
+      for (const el of [date, weight, note]) el.disabled = !a;
+      if (!a) return;
+      // Огноо: сүүлийн жинлэлтээс өмнө байж болохгүй, бойлох өдрөөс хойш байж болохгүй
+      const minDate = [a.purchase_date, a.last_weigh_date].filter(Boolean).sort().pop();
+      date.min = minDate;
+      if (a.slaughter_date) date.max = a.slaughter_date; else date.removeAttribute('max');
+      date.value = [today(), minDate].sort().pop();
+      msg.className = 'form-msg'; msg.textContent = '';
+    };
+    picker.addEventListener('input', select);
+    picker.addEventListener('change', () => { select(); if (a) weight.focus(); });
+    const form = h('form', { class: 'modal-body' },
+      h('div', { class: 'form-grid' }, h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Мал *'), picker)),
+      infoBox,
       h('div', { class: 'form-grid' },
         h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Огноо *'), date),
         h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Жин (кг) *'), weight),
@@ -1491,15 +1526,17 @@ PAGES.weighings = async main => {
         h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'), save));
     form.addEventListener('submit', async e => {
       e.preventDefault();
-      save.disabled = true; msg.className = 'form-msg'; msg.textContent = '';
+      msg.className = 'form-msg'; msg.textContent = '';
+      if (!a) { msg.className = 'form-msg err'; msg.textContent = pool.length ? 'Жагсаалтаас мал сонгоно уу' : 'Жинлэх мал алга'; return; }
+      save.disabled = true;
       try {
         await api('POST', '/api/r/weighings', { date: date.value, tag_id: a.tag_id, weight: weight.value, note: note.value || null });
         dlg.close(); toast(`${a.tag_id}: ${FMT.kg(Number(weight.value))} бүртгэгдлээ`);
         st.open.add(a.id); await reload();
       } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; save.disabled = false; }
     });
-    const dlg = modal(`Жин бүртгэх — ${a.tag_id}`, form);
-    weight.focus();
+    const dlg = modal('Жин бүртгэх', form);
+    picker.focus();
   }
 
   function detail(a) {
@@ -1527,7 +1564,9 @@ PAGES.weighings = async main => {
     && (!st.q || [a.tag_id, a.tag_color, a.species, a.current_age_name].some(v => String(v ?? '').toLowerCase().includes(st.q))));
 
   function draw() {
-    const list = visible();
+    // Жагсаалтад зөвхөн жинлэлтэд орсон мал; самбар шүүгдсэн бүх малаар тооцно
+    const pool = visible();
+    const list = pool.filter(a => a.last_weight != null);
     const rows = [];
     for (const a of list) {
       const open = st.open.has(a.id);
@@ -1542,20 +1581,18 @@ PAGES.weighings = async main => {
         h('td', { class: 'num', 'data-label': 'Өдрийн өсөлт' }, a.adg != null ? FMT.kg(a.adg) : ''),
         h('td', { class: 'num', 'data-label': 'Шаардлагатай өдрийн өсөлт' }, a.goal_adg != null ? FMT.kg(a.goal_adg) : ''),
         h('td', { class: 'num', 'data-label': 'Зорилтот жин' }, FMT.kg(a.target_weight)),
-        h('td', { 'data-label': 'Зорилтын төлөв' }, badge(a.target_status)),
-        h('td', { class: 'row-actions' }, h('div', { class: 'weigh-actions' },
-          canWeigh(a) ? h('button', { type: 'button', class: 'btn primary small', onclick: e => { e.stopPropagation(); openWeigh(a); } }, 'Жин бүртгэх') : null))));
+        h('td', { 'data-label': 'Зорилтын төлөв' }, badge(a.target_status))));
       if (open) rows.push(detail(a));
     }
     tbody.replaceChildren(...rows);
-    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: COLS, class: 'empty' }, 'Мал алга')));
+    if (!list.length) tbody.append(h('tr', {}, h('td', { colspan: COLS, class: 'empty' }, 'Жинлэлт алга')));
     const sum = k => list.reduce((s, a) => s + (Number(a[k]) || 0), 0);
     tfoot.replaceChildren(list.length ? h('tr', {}, h('td', {}, 'Нийт'), h('td'), h('td'),
       h('td', { class: 'num', 'data-label': 'Анхны жин' }, FMT.kg(sum('initial_weight'))), h('td'),
       h('td', { class: 'num', 'data-label': 'Сүүлийн жин' }, FMT.kg(sum('last_weight'))), h('td'),
-      h('td', { class: 'num', 'data-label': 'Өсөлт' }, FMT.kg(sum('gain'))), h('td'), h('td'), h('td'), h('td'), h('td')) : '');
+      h('td', { class: 'num', 'data-label': 'Өсөлт' }, FMT.kg(sum('gain'))), h('td'), h('td'), h('td'), h('td')) : '');
     count.textContent = `${list.length} мал`;
-    drawBoard(list);
+    drawBoard(pool);
   }
 
   // Самбар: харагдаж буй (шүүгдсэн) малын жинлэлтийн үзүүлэлтүүд
@@ -1595,13 +1632,14 @@ PAGES.weighings = async main => {
           // Анхдагч: бойлогдоогүй, зарагдаагүй бүх мал (Идэвхтэй + Бой товлогдсон) — жинлэгдэх ёстой
           h('option', { value: 'live', selected: st.state === 'live' }, 'Идэвхтэй + бой товлогдсон'),
           ANIMAL_STATES.map(o => h('option', { value: o, selected: st.state === o }, o))),
-        sel('Зорилт', 'target', ['Борлуулах', 'Хүрээгүй', 'Тохиргоо олдсонгүй']))),
+        sel('Зорилт', 'target', ['Борлуулах', 'Хүрээгүй', 'Тохиргоо олдсонгүй']),
+        canWrite ? h('button', { class: 'btn primary small', type: 'button', onclick: openWeigh }, '+ Жин бүртгэх') : null)),
     h('div', { class: 'table-wrap' }, sortableTable({ class: 'data weigh-table' },
       h('thead', {}, h('tr', {},
         h('th', {}, 'Малын ID'), h('th', {}, 'Төрөл'), h('th', {}, 'Насны нэршил'), h('th', { class: 'num' }, 'Анхны жин'),
         h('th', {}, 'Сүүлд жинлэсэн'), h('th', { class: 'num' }, 'Сүүлийн жин'), h('th', { class: 'num' }, 'Хоног'),
         h('th', { class: 'num' }, 'Өсөлт'), h('th', { class: 'num' }, 'Өдрийн өсөлт'), h('th', { class: 'num' }, 'Шаардлагатай өдрийн өсөлт'),
-        h('th', { class: 'num' }, 'Зорилтот жин'), h('th', {}, 'Зорилтын төлөв'), h('th', { class: 'row-actions' }))),
+        h('th', { class: 'num' }, 'Зорилтот жин'), h('th', {}, 'Зорилтын төлөв'))),
       tbody, tfoot)),
     h('div', { class: 'table-foot' }, count)));
   draw();
@@ -1684,6 +1722,8 @@ const addLinkedBtn = (r, refresh) => (!r.related_ref && canMod('expenses', 2)
   } }, '+ Тээвэр') : null);
 const EXPENSE_CFG = {
   res: 'expenses', module: 'expenses', photos: true, title: 'Зардлын бүртгэл', itemName: 'зардал', addLabel: '+ Зардал нэмэх',
+  // Шинэ тэжээлийг зөвхөн "Тэжээлийн бүртгэл"-ээс оруулна (бүртгэгдсэнийг энд засаж болно)
+  validate: (b, row) => (String(b.type || '').trim() === FEED_TYPE && row?.type !== FEED_TYPE ? 'Тэжээлийг Тэжээлийн бүртгэл цэснээс бүртгэнэ үү' : null),
   // "Мал авсан" мөр малын бүртгэлээс автоматаар орно — үнийг малын бүртгэл дээр засна
   // "Мал авсан" мөрөнд мөн "+ Тээвэр" (малын тээвэр г.м. нэмэлт зардал)
   autoAction: (r, _open, refresh) => [addLinkedBtn(r, refresh),
@@ -1707,7 +1747,7 @@ const EXPENSE_CFG = {
   filters: [{ k: 'type', label: 'Төрөл', options: rows => uniq(rows, 'type') }],
   fields: [
     { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
-    { k: 'type', label: 'Зардлын төрөл', req: true, maxlength: 100, suggest: () => state.lk.suggest.expenseType },
+    { k: 'type', label: 'Зардлын төрөл', req: true, maxlength: 100, suggest: () => state.lk.suggest.expenseType.filter(t => t !== FEED_TYPE) },
     // "Тэжээл" төрөлд: дэд төрөл = Тохиргоо → Тэжээл; сонгоход нэгж үнийг тохиргооны үнээр бөглөнө
     { k: 'feed_name', label: 'Тэжээлийн төрөл *', type: 'select', showIf: v => v.type === FEED_TYPE,
       options: () => state.lk.suggest.feeds.map(f => [f.name, f.name]),
@@ -2147,10 +2187,30 @@ PAGES.feed = async main => {
   main.replaceChildren(stockBox, usageBox);
   const rerender = async () => { await loadLookups(); await PAGES.feed(main); };
 
-  // Тэжээлийн үлдэгдэл: Зардлын бүртгэлийн "Тэжээл" төрлөөр орж ирсэн − зарцуулалт
+  // Худалдаж авсан тэжээл: энд бүртгэнэ, Зардлын бүртгэлд "Тэжээл" төрлөөр нэмэгдэнэ
+  const buyCfg = {
+    res: 'expenses', module: 'expenses', itemName: 'тэжээл', photos: canMod('expenses', 2), fixed: { type: FEED_TYPE },
+    fields: [
+      { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
+      { k: 'feed_name', label: 'Тэжээлийн төрөл', type: 'select', req: true,
+        options: () => state.lk.suggest.feeds.map(f => [f.name, f.name]),
+        emptyText: () => 'Тохиргоо → Тэжээл хоосон байна',
+        onChange: fillFeedPrice },
+      { k: 'unit', label: 'Нэгж', type: 'select', req: true, def: 'кг', options: () => opt(FEED_UNITS), onChange: fillFeedPrice },
+      { k: 'qty', label: 'Хэмжээ', type: 'number', req: true },
+      { k: 'unit_price', label: 'Нэгж үнэ ₮', type: 'number' },
+      { k: 'total_info', label: 'Нийт үнэ', type: 'info',
+        compute: v => (Number(v.qty) > 0 && Number(v.unit_price) > 0 ? FMT.money(Number(v.qty) * Number(v.unit_price)) : null) },
+      { k: 'supplier', label: 'Нийлүүлэгч', full: true, suggest: () => state.lk.suggest.supplier },
+      { k: 'description', label: 'Тайлбар', full: true }
+    ]
+  };
+  // Тэжээлийн үлдэгдэл: бүртгэсэн тэжээл − зарцуулалт
   await crudSection(stockBox, {
     res: 'feed_stock', title: 'Тэжээлийн бүртгэлийн жагсаалт', readonly: true, rowActions: false, noAdd: true,
-    empty: 'Зардлын бүртгэлд "Тэжээл" төрлийн зардал алга',
+    empty: 'Тэжээл бүртгэгдээгүй байна',
+    toolbarExtra: () => (canMod('expenses', 2) || canMod('feed', 2)
+      ? h('button', { class: 'btn primary small', type: 'button', onclick: () => openForm(buyCfg, null, rerender, false) }, '+ Тэжээл бүртгэх') : null),
     columns: [
       { k: 'feed_name', label: 'Тэжээл' }, { k: 'unit', label: 'Нэгж' },
       { k: 'in_qty', label: 'Орлого', f: 'num' }, { k: 'used_qty', label: 'Зарцуулсан', f: 'num' },

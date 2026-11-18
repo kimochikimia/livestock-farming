@@ -660,12 +660,12 @@ app.get('/api/r/:res', async (req, res) => {
   requirePerm(req, r.readers, 1);
   let rows = await listRows(r, req.farm.id);
   if (r.photos) {
-    const ph = new Map((await db.q('SELECT entity_id, COUNT(*) n, MIN(id) first FROM photos WHERE farm_id = ? AND entity = ? GROUP BY entity_id',
+    const ph = new Map((await db.q('SELECT entity_id, COUNT(*) n, MIN(id) first FROM photos WHERE farm_id = ? AND entity = ? AND kind IS NULL GROUP BY entity_id',
       [req.farm.id, r.table])).map(p => [p.entity_id, p]));
     rows = rows.map(row => ({ ...row, photo_count: ph.get(row.id)?.n || 0, photo_first: ph.get(row.id)?.first || null }));
     // Малын бүртгэлээс орсон "Мал авсан" зардалд тухайн малын зургийг харуулна
     if (rows.some(row => row.auto === 'animal')) {
-      const ap = new Map((await db.q("SELECT entity_id, COUNT(*) n, MIN(id) first FROM photos WHERE farm_id = ? AND entity = 'animals' GROUP BY entity_id",
+      const ap = new Map((await db.q("SELECT entity_id, COUNT(*) n, MIN(id) first FROM photos WHERE farm_id = ? AND entity = 'animals' AND kind IS NULL GROUP BY entity_id",
         [req.farm.id])).map(p => [p.entity_id, p]));
       rows = rows.map(row => (row.auto === 'animal'
         ? { ...row, photo_res: 'animals', photo_id: row.animal_id, photo_count: ap.get(row.animal_id)?.n || 0, photo_first: ap.get(row.animal_id)?.first || null }
@@ -677,7 +677,7 @@ app.get('/api/r/:res', async (req, res) => {
 
 app.post('/api/r/:res', async (req, res) => {
   const r = getRes(req.params.res, true);
-  requirePerm(req, r.module, r.settings ? 3 : 2);
+  requirePerm(req, r.createModules?.(req.body) || r.module, r.settings ? 3 : 2);
   const v = validate(r.fields, req.body || {});
   const desc = describe(r, v);
   if (r.prepare) await r.prepare(v, db, req.farm.id);
@@ -822,12 +822,14 @@ async function photoTarget(req) {
   return { r, id };
 }
 
+// ?kind=tag — ээмгийн зураг; өгөөгүй бол үндсэн зураг
+const photoKind = req => (req.query.kind === 'tag' ? 'tag' : null);
 app.get('/api/photos/:res/:id', async (req, res) => {
   const { r, id } = await photoTarget(req);
   requirePerm(req, r.readers, 1);
   res.json(await db.q(`SELECT p.id, p.size, p.created_at, p.created_by, u.name AS created_by_name
-    FROM photos p LEFT JOIN users u ON u.id = p.created_by WHERE p.farm_id = ? AND p.entity = ? AND p.entity_id = ? ORDER BY p.id`,
-  [req.farm.id, r.table, id]));
+    FROM photos p LEFT JOIN users u ON u.id = p.created_by WHERE p.farm_id = ? AND p.entity = ? AND p.entity_id = ? AND p.kind <=> ? ORDER BY p.id`,
+  [req.farm.id, r.table, id, photoKind(req)]));
 });
 
 app.post('/api/photos/:res/:id', async (req, res) => {
@@ -841,8 +843,8 @@ app.post('/api/photos/:res/:id', async (req, res) => {
   if (n >= 30) throw new HttpError(400, 'Нэг бүртгэлд хамгийн ихдээ 30 зураг');
   const filename = crypto.randomBytes(16).toString('hex') + kind[1];
   fs.writeFileSync(path.join(UPLOAD_DIR, filename), buf);
-  const { insertId } = await db.run('INSERT INTO photos(farm_id, entity, entity_id, filename, mime, size, created_by) VALUES(?, ?, ?, ?, ?, ?, ?)',
-    [req.farm.id, r.table, id, filename, kind[0], buf.length, req.user.id]);
+  const { insertId } = await db.run('INSERT INTO photos(farm_id, entity, entity_id, filename, mime, size, created_by, kind) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+    [req.farm.id, r.table, id, filename, kind[0], buf.length, req.user.id, photoKind(req)]);
   await farmAudit(req, 'Зураг нэмэв', r.table, id, r.title);
   res.json({ id: insertId });
 });
