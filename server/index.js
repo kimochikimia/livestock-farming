@@ -71,7 +71,7 @@ const cleanup = () => db.run('DELETE FROM sessions WHERE expires_at < ?', [Date.
 app.use(async (req, res, next) => {
   const t = req.cookies.sid;
   if (t) {
-    const row = await db.one(`SELECT u.id, u.phone, u.name, u.role, u.status, s.expires_at
+    const row = await db.one(`SELECT u.id, u.phone, u.name, u.email, u.role, u.status, s.expires_at
       FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`, [sha(t)]);
     if (row && Number(row.expires_at) > Date.now() && row.status === 'approved') req.user = row;
   }
@@ -83,7 +83,7 @@ function guard(req, min) {
   if (LEVEL[req.user.role] < LEVEL[min]) throw new HttpError(403, 'Танд энэ үйлдлийг хийх эрх байхгүй');
 }
 const need = min => (req, res, next) => { guard(req, min); next(); };
-const pubUser = u => ({ id: u.id, phone: u.phone, name: u.name, role: u.role, status: u.status });
+const pubUser = u => ({ id: u.id, phone: u.phone, name: u.name, email: u.email ?? null, role: u.role, status: u.status });
 
 // ---------- Ферм ба эрх ----------
 // Фермийн эзэмшигч болон сайтын админ тухайн фермд бүрэн эрхтэй (canAccessFarm).
@@ -150,6 +150,11 @@ function checkName(name, what = 'Нэрээ', max = 80) {
   if (n.length > max) throw new HttpError(400, 'Нэр хэт урт байна');
   return n;
 }
+function checkEmail(e) {
+  const email = String(e || '').trim().toLowerCase();
+  if (email.length > 190 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Имэйл хаягаа зөв оруулна уу');
+  return email;
+}
 function checkPhone(p) {
   const phone = normPhone(p);
   if (!/^\d{8}$/.test(phone)) throw new HttpError(400, 'Утасны дугаар 8 оронтой байна');
@@ -166,10 +171,12 @@ const DUMMY_HASH = bcrypt.hashSync('dummy-password-for-timing', 12);
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   const name = checkName(req.body.name);
   const phone = checkPhone(req.body.phone);
+  const email = checkEmail(req.body.email);
   checkPassword(req.body.password);
   if (await db.one('SELECT 1 x FROM users WHERE phone = ?', [phone])) throw new HttpError(409, 'Энэ утасны дугаар бүртгэлтэй байна');
+  if (await db.one('SELECT 1 x FROM users WHERE email = ?', [email])) throw new HttpError(409, 'Энэ имэйл бүртгэлтэй байна');
   const hash = await bcrypt.hash(req.body.password, 12);
-  const { insertId } = await db.run('INSERT INTO users(phone, name, password_hash) VALUES(?, ?, ?)', [phone, name, hash]);
+  const { insertId } = await db.run('INSERT INTO users(phone, name, email, password_hash) VALUES(?, ?, ?, ?)', [phone, name, email, hash]);
   await audit(insertId, 'Бүртгүүлэв', 'users', insertId, `${name} (${phone})`);
   res.json({ ok: true, message: 'Бүртгэл амжилттай илгээгдлээ. Админ баталгаажуулсны дараа нэвтрэх боломжтой.' });
 });
@@ -196,6 +203,15 @@ app.post('/api/auth/logout', async (req, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => res.json({ user: req.user ? pubUser(req.user) : null }));
+
+// Өөрийн имэйлийг нэмэх / солих
+app.post('/api/auth/email', need('viewer'), async (req, res) => {
+  const email = checkEmail(req.body.email);
+  if (await db.one('SELECT 1 x FROM users WHERE email = ? AND id <> ?', [email, req.user.id])) throw new HttpError(409, 'Энэ имэйл бүртгэлтэй байна');
+  await db.run('UPDATE users SET email = ? WHERE id = ?', [email, req.user.id]);
+  await audit(req.user.id, 'Имэйлээ солив', 'users', req.user.id);
+  res.json({ ok: true, email });
+});
 
 app.post('/api/auth/password', need('viewer'), async (req, res) => {
   const u = await db.one('SELECT * FROM users WHERE id = ?', [req.user.id]);
@@ -401,7 +417,7 @@ app.delete('/api/farms/:id/members/:userId', need('viewer'), async (req, res) =>
 
 // ---------- Admin: хэрэглэгчид ----------
 app.get('/api/admin/users', need('admin'), async (req, res) => {
-  res.json(await db.q(`SELECT u.id, u.phone, u.name, u.role, u.status, u.created_at, u.reviewed_at, u.last_login, r.name AS reviewed_by_name,
+  res.json(await db.q(`SELECT u.id, u.phone, u.name, u.email, u.role, u.status, u.created_at, u.reviewed_at, u.last_login, r.name AS reviewed_by_name,
       (SELECT COUNT(*) FROM farms f WHERE f.owner_id = u.id) AS farm_count
     FROM users u LEFT JOIN users r ON r.id = u.reviewed_by
     ORDER BY CASE u.status WHEN 'pending' THEN 0 ELSE 1 END, u.created_at DESC`));

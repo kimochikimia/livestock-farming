@@ -232,6 +232,11 @@ async function init() {
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг
   await ensureColumn('photos', 'kind', 'VARCHAR(10) NULL');
+  // Хэрэглэгчийн имэйл: давхцахгүй (өмнө бүртгүүлсэн хэрэглэгчид хоосон байж болно)
+  await ensureColumn('users', 'email', 'VARCHAR(190) NULL');
+  if (!await db.one('SELECT 1 x FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND INDEX_NAME = ?', [CONFIG.database, 'users', 'uq_users_email'])) {
+    await pool.query('ALTER TABLE users ADD UNIQUE INDEX uq_users_email (email)').catch(e => { if (e.code !== 'ER_DUP_KEYNAME') throw e; });
+  }
   await ensureColumn('slaughters', 'planned_date', 'DATE NULL');
   await ensureColumn('slaughters', 'slaughtered_date', 'DATE NULL');
   await pool.query('UPDATE slaughters SET planned_date = date WHERE planned_date IS NULL');

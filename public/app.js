@@ -132,7 +132,8 @@ const NAV = [
   // "Тэжээл" бүлэг: бүртгэл (үлдэгдэл, зарцуулалт) ба тооцоо (өртөг, төлөвлөгөө, жор)
   { group: 'feedgroup', farm: true, label: 'Тэжээл', icon: '❦' },
   { path: 'feed', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн бүртгэл', permLabel: 'Тэжээл', icon: '▤' },
-  { path: 'feedcalc', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн тооцоо', icon: '∑' },
+  { path: 'feedusage', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээл зарцуулалт', icon: '⊖' },
+  { path: 'feedcalc', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн төлөвлөлт', icon: '∑' },
   // Бойны бүртгэл: зарахад бэлэн → бойн хуваарь → гулууз → мах ачилт (хуучин 3 цэсийг нэгтгэсэн)
   { path: 'slaughter', farm: true, module: 'slaughter', label: 'Бойны бүртгэл', icon: '▤' },
   // "Санхүү" бүлэг: орлого (борлуулалт) ба зарлага
@@ -266,6 +267,7 @@ function openAuth(startMode = 'login') {
     const phone = h('input', { name: 'phone', type: 'tel', inputmode: 'numeric', autocomplete: 'tel', required: true, maxlength: 12 });
     const pw = h('input', { name: 'password', type: 'password', autocomplete: mode === 'login' ? 'current-password' : 'new-password', required: true, minlength: mode === 'login' ? null : 8 });
     const name = h('input', { name: 'name', autocomplete: 'name', required: true, maxlength: 80 });
+    const email = h('input', { name: 'email', type: 'email', autocomplete: 'email', required: true, maxlength: 190 });
     const pw2 = h('input', { name: 'password2', type: 'password', autocomplete: 'new-password', required: true });
     const btn = h('button', { class: 'btn primary block', type: 'submit' }, mode === 'login' ? 'Нэвтрэх' : 'Бүртгүүлэх');
     const form = h('form', {
@@ -279,7 +281,7 @@ function openAuth(startMode = 'login') {
             if (!location.hash || location.hash === '#/') location.hash = '#/farms'; else render();
           } else {
             if (pw.value !== pw2.value) throw new Error('Нууц үг таарахгүй байна');
-            const r = await api('POST', '/api/auth/register', { name: name.value, phone: phone.value, password: pw.value });
+            const r = await api('POST', '/api/auth/register', { name: name.value, phone: phone.value, email: email.value, password: pw.value });
             mode = 'login'; draw(r.message);
           }
         } catch (err) { msg.className = 'form-msg err'; msg.textContent = err.message; }
@@ -288,6 +290,7 @@ function openAuth(startMode = 'login') {
     },
       mode === 'register' ? field('Нэр', name) : null,
       field('Утасны дугаар', phone),
+      mode === 'register' ? field('Имэйл', email) : null,
       field('Нууц үг', pw),
       mode === 'register' ? field('Нууц үг давтах', pw2) : null,
       msg, btn);
@@ -1601,10 +1604,7 @@ PAGES.weighings = async main => {
     const tday = today();
     const kpi = (label, value, sub, cls) => h('div', { class: 'kpi ' + (cls || ''), title: [label, value, sub].filter(Boolean).join('\n') },
       h('span', { class: 'kpi-label' }, label), h('span', { class: 'kpi-value' }, value), sub ? h('span', { class: 'kpi-sub' }, sub) : null);
-    const sum = (l, k) => l.reduce((s, a) => s + (Number(a[k]) || 0), 0);
     const weighed = list.filter(a => a.last_weight != null);
-    const withAdg = list.filter(a => a.adg != null);
-    const best = withAdg.reduce((b, a) => (!b || a.adg > b.adg ? a : b), null);
     const recs = list.flatMap(a => byAnimal.get(a.id) || []);
     const month = tday.slice(0, 7);
     const stale = list.filter(a => (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон')
@@ -1613,7 +1613,6 @@ PAGES.weighings = async main => {
     const ready = list.filter(a => a.target_status === 'Борлуулах').length;
     board.replaceChildren(
       kpi('Жинлэсэн мал', `${weighed.length} / ${list.length}`, list.length - weighed.length ? `Жинлээгүй ${list.length - weighed.length}` : 'Бүгд жинлэгдсэн'),
-      kpi('Дундаж өдрийн өсөлт', withAdg.length ? FMT.kg(sum(withAdg, 'adg') / withAdg.length) : '—', best ? `Шилдэг ${best.tag_id} · ${FMT.kg(best.adg)}` : null),
       kpi('Жинлэлтийн тоо', `${recs.length}`, `Энэ сард ${recs.filter(w => w.date.startsWith(month)).length}`),
       kpi('30+ хоног жинлээгүй', `${stale.length} мал`, stale.length ? stale.slice(0, 4).map(a => a.tag_id).join(', ') : null, stale.length ? 'neg' : ''),
       kpi('Өсөлт хангалтгүй', `${slow.length} мал`, 'Шаардлагатай өсөлтөөс бага', slow.length ? 'neg' : ''),
@@ -2183,8 +2182,6 @@ const MARKET_CFG = () => ({
 
 // ----- Тэжээл → Тэжээлийн бүртгэл: үлдэгдэл, зарцуулалт -----
 PAGES.feed = async main => {
-  const stockBox = h('div'); const usageBox = h('div');
-  main.replaceChildren(stockBox, usageBox);
   const rerender = async () => { await loadLookups(); await PAGES.feed(main); };
 
   // Худалдаж авсан тэжээл: энд бүртгэнэ, Зардлын бүртгэлд "Тэжээл" төрлөөр нэмэгдэнэ
@@ -2206,7 +2203,7 @@ PAGES.feed = async main => {
     ]
   };
   // Тэжээлийн үлдэгдэл: бүртгэсэн тэжээл − зарцуулалт
-  await crudSection(stockBox, {
+  await crudSection(main, {
     res: 'feed_stock', title: 'Тэжээлийн бүртгэлийн жагсаалт', readonly: true, rowActions: false, noAdd: true,
     empty: 'Тэжээл бүртгэгдээгүй байна',
     toolbarExtra: () => (canMod('expenses', 2) || canMod('feed', 2)
@@ -2221,6 +2218,11 @@ PAGES.feed = async main => {
     ],
     totals: ['left_value']
   });
+};
+
+// ----- Тэжээл → Тэжээл зарцуулалт: бүртгэсэн тэжээлийн үлдэгдлээс хасагдана -----
+PAGES.feedusage = async main => {
+  const rerender = async () => { await loadLookups(); await PAGES.feedusage(main); };
   const stock = await api('GET', '/api/r/feed_stock');
   const stockOf = name => stock.filter(r => r.feed_name === name);
   // Зарцуулалтын нэгж: боодлын жин мэдэгдэж байвал кг/боодол аль аль нь, үгүй бол үлдэгдэлтэй нэгжүүд
@@ -2230,8 +2232,8 @@ PAGES.feed = async main => {
     return rows.filter(r => r.left_qty > 0).map(r => r.unit);
   };
   const leftText = name => stockOf(name).map(r => qtyUnit(r.left_qty, r.unit) + (r.left_bale != null ? ` (≈ ${FMT.num(r.left_bale)} боодол)` : '')).join(' · ');
-  await crudSection(usageBox, {
-    res: 'feed_usage', title: 'Тэжээлийн зарцуулалт', itemName: 'зарцуулалт', module: 'feed', addLabel: '+ Зарцуулалт бүртгэх', onChange: rerender,
+  await crudSection(main, {
+    res: 'feed_usage', title: 'Тэжээл зарцуулалт', itemName: 'зарцуулалт', module: 'feed', addLabel: '+ Зарцуулалт бүртгэх', onChange: rerender,
     columns: [
       { k: 'date', label: 'Огноо' }, { k: 'feed_name', label: 'Тэжээл' },
       { k: 'qty', label: 'Хэмжээ', f: 'num', render: r => qtyUnit(r.qty, r.unit), csv: r => qtyUnit(r.qty, r.unit) },
@@ -2253,7 +2255,7 @@ PAGES.feed = async main => {
   });
 };
 
-// ----- Тэжээл → Тэжээлийн тооцоо: өртгийн тооцоо, төлөвлөгөө, жор -----
+// ----- Тэжээл → Тэжээлийн төлөвлөлт: өртгийн тооцоо, төлөвлөгөө, жор -----
 PAGES.feedcalc = async main => {
   const s = state.lk.settings;
   const summaryBox = h('div'); const planBox = h('div'); const recipeBox = h('div');
@@ -2786,10 +2788,10 @@ PAGES.users = async main => {
       h('div', { class: 'toolbar' }, h('h2', {}, 'Бүх хэрэглэгч'),
         h('div', { class: 'toolbar-right' }, h('button', { class: 'btn primary small', onclick: addUser }, '+ Хэрэглэгч нэмэх'))),
       h('div', { class: 'table-wrap' }, enhanceTable(h('table', { class: 'data' },
-        h('thead', {}, h('tr', {}, ['Нэр', 'Утас', 'Эрх', 'Төлөв', 'Ферм', 'Бүртгүүлсэн', 'Шийдвэрлэсэн', 'Сүүлд нэвтэрсэн', ''].map(t => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, ['Нэр', 'Утас', 'Имэйл', 'Эрх', 'Төлөв', 'Ферм', 'Бүртгүүлсэн', 'Шийдвэрлэсэн', 'Сүүлд нэвтэрсэн', ''].map(t => h('th', {}, t)))),
         h('tbody', {}, users.map(u => h('tr', { class: 'clickable' + (u.status === 'pending' ? ' pending-row' : ''), onclick: () => editUser(u) },
           h('td', {}, u.name, u.id === state.user.id ? h('span', { class: 'muted small' }, ' (та)') : null),
-          h('td', {}, u.phone), h('td', {}, ROLE_LABEL[u.role]),
+          h('td', {}, u.phone), h('td', {}, u.email ?? ''), h('td', {}, ROLE_LABEL[u.role]),
           h('td', {}, badge(u.status, STATUS_LABEL[u.status])),
           h('td', { class: 'num' }, u.farm_count),
           h('td', {}, FMT.dt(u.created_at)),
@@ -2941,12 +2943,25 @@ PAGES.profile = async main => {
   const nw = h('input', { type: 'password', autocomplete: 'new-password', minlength: 8, required: true });
   const nw2 = h('input', { type: 'password', autocomplete: 'new-password', required: true });
   const msg = h('div', { class: 'form-msg' });
+  const email = h('input', { type: 'email', autocomplete: 'email', required: true, maxlength: 190, value: state.user.email || '' });
+  const emailMsg = h('div', { class: 'form-msg' });
   main.replaceChildren(
     h('section', { class: 'card narrow' }, h('h2', {}, 'Миний мэдээлэл'),
       h('div', { class: 'kv-grid' },
         h('div', { class: 'kv' }, h('span', {}, 'Нэр'), h('span', {}, state.user.name)),
         h('div', { class: 'kv' }, h('span', {}, 'Утас'), h('span', {}, state.user.phone)),
-        h('div', { class: 'kv' }, h('span', {}, 'Эрх'), h('span', {}, ROLE_LABEL[state.user.role])))),
+        h('div', { class: 'kv' }, h('span', {}, 'Эрх'), h('span', {}, ROLE_LABEL[state.user.role]))),
+      h('form', {
+        onsubmit: async e => {
+          e.preventDefault(); emailMsg.className = 'form-msg'; emailMsg.textContent = '';
+          try {
+            const r = await api('POST', '/api/auth/email', { email: email.value });
+            state.user.email = r.email; email.value = r.email;
+            emailMsg.className = 'form-msg ok'; emailMsg.textContent = 'Хадгаллаа';
+          } catch (ex) { emailMsg.className = 'form-msg err'; emailMsg.textContent = ex.message; }
+        }
+      }, field('Имэйл', email), emailMsg,
+      h('div', { class: 'form-actions' }, h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')))),
     h('section', { class: 'card narrow' }, h('h2', {}, 'Нууц үг солих'),
       h('form', {
         onsubmit: async e => {
