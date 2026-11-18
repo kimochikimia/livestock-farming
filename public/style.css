@@ -807,6 +807,8 @@ html[data-farm-theme="color"][data-farm-light] .btn.primary { background: var(--
 .color-picker { align-items: center; }
 .color-reset { margin-left: 4px; }
 .color-reset:disabled { opacity: .5; cursor: default; }
+.invest-sources { display: flex; flex-direction: column; gap: 6px; }
+.invest-source { display: grid; grid-template-columns: minmax(0, 1fr) 60px 110px; gap: 10px; align-items: center; }
 /* Маягтын эхний бүлгийн гарчиг дээр зураасгүй */
 .form-grid > .form-section:first-child { border-top: none; padding-top: 0; margin-top: 0; }
 /* Маягтад гурав зэрэгцсэн талбар (.third); бусад нь хагас өргөнтэй хэвээр */

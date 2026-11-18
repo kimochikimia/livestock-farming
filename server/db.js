@@ -180,7 +180,9 @@ const SCHEMA = [
 
 async function ensureColumn(table, col, def) {
   const exists = await db.one('SELECT 1 x FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?', [CONFIG.database, table, col]);
-  if (!exists) await pool.query(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+  if (exists) return false;
+  await pool.query(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+  return true;
 }
 
 async function init() {
@@ -228,6 +230,13 @@ async function init() {
   await ensureColumn('expenses', 'related_ref', 'VARCHAR(40) NULL');
   // Хөрөнгө оруулагч = вэбд бүртгэлтэй хэрэглэгч (утасны дугаараар холбоно)
   await ensureColumn('partners', 'user_id', 'INT NULL');
+  // Фермийн эзэмшигч = анхдагч хөрөнгө оруулагч (100%). Багана шинээр нэмэгдэх үед л нэг удаа:
+  // хөрөнгө оруулагчгүй фермүүдэд эзэмшигчийг нэмнэ (дараа нь устгасан бол дахин нэмэгдэхгүй)
+  if (await ensureColumn('partners', 'is_owner', 'TINYINT(1) NOT NULL DEFAULT 0')) {
+    await pool.query(`INSERT INTO partners(farm_id, name, phone, percent, user_id, is_owner)
+      SELECT f.id, u.name, u.phone, 100, u.id, 1 FROM farms f JOIN users u ON u.id = f.owner_id
+      WHERE NOT EXISTS (SELECT 1 FROM partners p WHERE p.farm_id = f.id)`);
+  }
   // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг
@@ -295,7 +304,6 @@ const COPYABLE = {
   task_types: ['name', 'needs_animals'],
   breeding: ['species', 'dam_name', 'births_per_year', 'gestation', 'breeding_months', 'birthing_months'],
   feed_plan: ['feed_name', 'kg_1_14', 'kg_15_30', 'kg_31_90', 'price'],
-  partners: ['name', 'percent']
 };
 async function copyFarmSettings(c, fromId, toId) {
   for (const [t, cols] of Object.entries(COPYABLE)) {

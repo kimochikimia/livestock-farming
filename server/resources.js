@@ -234,6 +234,11 @@ async function animalPurchaseExpenses(db, farmId) {
   });
 }
 
+// Эзэмшигчээс бусад хөрөнгө оруулагчдын нийт хувь (exceptId мөрийг оруулахгүй)
+const otherInvestorsPercent = async (db, farmId, exceptId) => Number((await db.one(
+  'SELECT COALESCE(SUM(percent), 0) s FROM partners WHERE farm_id = ? AND is_owner = 0 AND id <> ?', [farmId, exceptId || 0])).s) || 0;
+const roundPct = n => Math.round(Math.max(0, n) * 1e6) / 1e6;
+
 const resources = {
   animals: {
     table: 'animals', title: 'Мал', track: true, photos: true, describe: v => v.tag_id,
@@ -730,6 +735,7 @@ const resources = {
       phone: { t: 'text', req: true, max: 20, label: 'Утас' },
       invested: { t: 'num', label: 'Оруулсан хөрөнгө' },
       percent: { t: 'num', req: true, max: 100, label: 'Ашгийн хувь (%)' },
+      sources: { t: 'text', max: 2000, label: 'Хувийг хэнээс хасах' }, // JSON { partnerId: хувь } — хүснэгтэд хадгалагдахгүй
       payout_period: { t: 'text', options: PAYOUT_PERIODS, label: 'Олгох давтамж' },
       start_date: { t: 'date', label: 'Эхлэх огноо' },
       end_date: { t: 'date', label: 'Дуусах огноо' },
@@ -737,17 +743,57 @@ const resources = {
     },
     // Нийт ашгийн хувь 100%-иас хэтрэхгүй; дуусах огноо эхлэхээс өмнө байж болохгүй
     async prepare(v, db, farmId, id) {
+      const rawSources = v.sources; delete v.sources;
       // Хөрөнгө оруулагч вэбд бүртгүүлсэн (баталгаажсан) хэрэглэгч байх ёстой — нэрийг бүртгэлээс авна
       const phone = String(v.phone || '').replace(/\D/g, '').replace(/^976(?=\d{8}$)/, '');
-      const u = /^\d{8}$/.test(phone) ? await db.one("SELECT id, name, phone FROM users WHERE phone = ? AND status = 'approved'", [phone]) : null;
+      // Эзэмшигчийн мөр үргэлж фермийн эзэмшигчтэй холбоотой (хувь, хөрөнгө зэргийг л засна)
+      const owner = id ? await db.one(`SELECT u.id, u.name, u.phone FROM partners p JOIN farms f ON f.id = p.farm_id JOIN users u ON u.id = f.owner_id
+        WHERE p.id = ? AND p.farm_id = ? AND p.is_owner = 1`, [id, farmId]) : null;
+      const u = owner || (/^\d{8}$/.test(phone) ? await db.one("SELECT id, name, phone FROM users WHERE phone = ? AND status = 'approved'", [phone]) : null);
       if (!u) throw new HttpError(400, `${v.phone} дугаараар бүртгүүлсэн (баталгаажсан) хэрэглэгч олдсонгүй. Хөрөнгө оруулагч эхлээд энэ вэбд бүртгүүлсэн байх ёстой`);
       if (await db.one('SELECT 1 x FROM partners WHERE farm_id = ? AND user_id = ? AND id <> ?', [farmId, u.id, id || 0])) {
         throw new HttpError(409, `${u.name} энэ фермийн хөрөнгө оруулагчаар аль хэдийн бүртгэгдсэн байна`);
       }
       v.user_id = u.id; v.name = u.name; v.phone = u.phone;
       if (v.start_date && v.end_date && v.end_date < v.start_date) throw new HttpError(400, 'Дуусах огноо эхлэх огнооноос өмнө байж болохгүй');
-      const { s } = await db.one('SELECT COALESCE(SUM(percent), 0) s FROM partners WHERE farm_id = ? AND id <> ?', [farmId, id || 0]);
-      if (s + v.percent > 100 + 1e-9) throw new HttpError(400, `Нийт ашгийн хувь 100%-иас хэтэрнэ (бусад: ${s}%, энэ: ${v.percent}%)`);
+      const rows = await db.q('SELECT id, name, percent, is_owner FROM partners WHERE farm_id = ?', [farmId]);
+      const me = rows.find(r => r.id === Number(id));
+      const others = rows.filter(r => r !== me);
+      const before = me?.percent || 0;
+      const need = v.percent - before;
+      // Хувь багассан: эзэмшигч биш бол чөлөөлөгдсөн хувь эзэмшигчид буцна
+      if (need <= 1e-9) {
+        const ownerRow = others.find(r => r.is_owner);
+        if (!ownerRow || me?.is_owner || need > -1e-9) return undefined;
+        const room = 100 - others.filter(r => !r.is_owner).reduce((s, r) => s + r.percent, 0) - v.percent;
+        return c => c.run('UPDATE partners SET percent = ? WHERE id = ?', [roundPct(Math.min(ownerRow.percent - need, room)), ownerRow.id]);
+      }
+      // Хувь нэмэгдсэн: эхлээд хуваарилагдаагүй хувь, үлдсэнийг сонгосон хөрөнгө оруулагчдаас хасна.
+      // Хувьтай ганц хөрөнгө оруулагч байвал түүнээс автоматаар хасна
+      const free = Math.max(0, 100 - others.reduce((s, r) => s + r.percent, 0) - before);
+      let picks = {};
+      if (rawSources) { try { picks = JSON.parse(rawSources) || {}; } catch { throw new HttpError(400, 'Хувь хасах мэдээлэл буруу байна'); } }
+      const holders = others.filter(r => r.percent > 0);
+      if (!Object.keys(picks).length && holders.length === 1) picks = { [holders[0].id]: Math.max(0, need - free) };
+      const take = [];
+      for (const [pid, raw] of Object.entries(picks)) {
+        const amount = Number(raw), from = others.find(r => r.id === Number(pid));
+        if (!from || !Number.isFinite(amount) || amount < 0) throw new HttpError(400, 'Хувь хасах мэдээлэл буруу байна');
+        if (amount > from.percent + 1e-9) throw new HttpError(400, `${from.name}-д ${from.percent}% л байна`);
+        if (amount > 0) take.push({ from, amount });
+      }
+      const taken = take.reduce((s, t) => s + t.amount, 0);
+      if (taken > need + 1e-9) throw new HttpError(400, `Хасах хувь (${roundPct(taken)}%) шаардлагатай хувиас (${roundPct(need)}%) их байна`);
+      if (need - taken > free + 1e-9) throw new HttpError(400, `${roundPct(need - taken - free)}% дутуу байна. Аль хөрөнгө оруулагчаас хасахаа оруулна уу`);
+      return async c => { for (const t of take) await c.run('UPDATE partners SET percent = ? WHERE id = ?', [roundPct(t.from.percent - t.amount), t.from.id]); };
+    },
+    // Хөрөнгө оруулагчийг устгахад түүний хувь эзэмшигчид буцна
+    async beforeDelete(old, db, farmId) {
+      if (old.is_owner) return;
+      const ownerRow = await db.one('SELECT id, percent FROM partners WHERE farm_id = ? AND is_owner = 1', [farmId]);
+      if (!ownerRow) return;
+      const room = 100 - await otherInvestorsPercent(db, farmId, old.id);
+      await db.run('UPDATE partners SET percent = ? WHERE id = ?', [roundPct(Math.min(ownerRow.percent + old.percent, room)), ownerRow.id]);
     }
   }
 };

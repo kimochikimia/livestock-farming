@@ -667,13 +667,15 @@ function openForm(cfg, row, onDone, canDel, init) {
   const refreshInfo = () => {
     for (const { f, el } of infos) el.textContent = f.compute(values) ?? '—';
     for (const f of cfg.fields) if (f.showIf && wrappers[f.k]) wrappers[f.k].hidden = !f.showIf(values);
+    for (const f of cfg.fields) f.onRefresh?.(values);
   };
   const err = h('div', { class: 'form-msg' });
 
   function buildControl(f) {
     let el;
     const v = values[f.k];
-    if (f.type === 'select') {
+    if (f.type === 'custom') el = f.build(values, row); // .value-тэй өөрийн удирдлага
+    else if (f.type === 'select') {
       const opts = f.options(values);
       el = h('select', { name: f.k, required: f.req },
         h('option', { value: '' }, '— сонгох —'),
@@ -752,7 +754,7 @@ function openForm(cfg, row, onDone, canDel, init) {
     }
     ctrls[f.k] = buildControl(f);
     // Олон сонголттой талбарыг <label>-д хийвэл хоосон зай дарахад чагт солигдоно — div ашиглана
-    const lab = f.type === 'multi'
+    const lab = f.type === 'multi' || f.type === 'custom'
       ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, f.label + (f.req ? ' *' : '')), ctrls[f.k])
       : field(f.label + (f.req ? ' *' : ''), ctrls[f.k], f.help);
     wrappers[f.k] = lab;
@@ -790,7 +792,7 @@ function openForm(cfg, row, onDone, canDel, init) {
         if (el?.tagName === 'SELECT') { const o = [...el.options].find(o => o.value === norm(val)); if (o && o.value !== '') return o.text; }
         return norm(val) || '—';
       };
-      const changes = inputs.filter(f => !f.virtual && body[f.k] !== undefined && norm(body[f.k]) !== norm(row[f.k])
+      const changes = inputs.filter(f => !f.virtual && !f.noDiff && body[f.k] !== undefined && norm(body[f.k]) !== norm(row[f.k])
         && !(f.type === 'number' && norm(row[f.k]) !== '' && Number(body[f.k]) === Number(row[f.k])))
         .map(f => `• ${f.label.replace(/\s*\*$/, '')}: ${shown(f, row[f.k])} → ${shown(f, body[f.k])}`);
       if (!changes.length) { dlg.close(); toast('Өөрчлөлт алга'); return; }
@@ -2379,10 +2381,56 @@ async function lookupInvestor(values, ctrls) {
     if (String(values.phone || '').replace(/\D/g, '').endsWith(digits)) setFormValue(values, ctrls, 'name', u.name);
   } catch (e) { setFormValue(values, ctrls, 'name', ''); if (ctrls.name) ctrls.name.placeholder = e.message; }
 }
-const INVESTOR_CFG = () => ({
+// Эзэмшигчийн мөрөнд утас солигдохгүй (хувь, хөрөнгө, хугацааг засна)
+const INVESTOR_CFG = () => {
+  const cfg = investorBaseCfg();
+  cfg.fields.splice(cfg.fields.findIndex(f => f.k === 'percent') + 1, 0, investorSourcesField());
+  cfg.rowCfg = r => (r.is_owner ? { ...cfg, fields: cfg.fields.map(f => (f.k === 'phone' ? { ...f, readonly: true, onChange: undefined } : f)) } : null);
+  return cfg;
+};
+// Нэмэгдэх хувийг аль хөрөнгө оруулагчаас хасахыг гараар тохируулна (хувьтай хоёроос олон хүн байвал)
+function investorSourcesField() {
+  const ctx = { rows: [], id: null, before: 0, inputs: new Map(), rest: null };
+  const round = n => Math.round(n * 100) / 100;
+  const others = () => ctx.rows.filter(r => r.id !== ctx.id);
+  const holders = () => others().filter(r => r.percent > 0);
+  const need = v => (Number(v.percent) || 0) - ctx.before;
+  return {
+    k: 'sources', label: 'Хувийг хэнээс хасах', type: 'custom', full: true, noDiff: true,
+    showIf: v => holders().length > 1 && need(v) > 0,
+    build(values, row) {
+      ctx.id = row?.id ?? null; ctx.before = Number(row?.percent) || 0; ctx.rows = []; ctx.inputs = new Map();
+      const list = h('div', { class: 'invest-sources' });
+      ctx.rest = h('div', { class: 'form-msg err' });
+      const wrap = h('div', {}, list, ctx.rest);
+      Object.defineProperty(wrap, 'value', { get() {
+        const picked = Object.fromEntries([...ctx.inputs].map(([id, el]) => [id, Number(el.value) || 0]).filter(([, n]) => n > 0));
+        return Object.keys(picked).length ? JSON.stringify(picked) : '';
+      } });
+      api('GET', '/api/r/partners').then(rows => {
+        ctx.rows = rows.map(r => ({ ...r, percent: Number(r.percent) || 0 }));
+        list.replaceChildren(...holders().map(r => {
+          const el = numberInput({ placeholder: '%' });
+          ctx.inputs.set(r.id, el);
+          return h('label', { class: 'invest-source' }, h('span', {}, r.name), h('span', { class: 'muted' }, FMT.pct(r.percent)), el);
+        }));
+        wrap.dispatchEvent(new Event('input', { bubbles: true }));
+      }).catch(e => toast(e.message, 'err'));
+      return wrap;
+    },
+    onRefresh(v) {
+      if (!ctx.rest) return;
+      const free = Math.max(0, 100 - others().reduce((s, r) => s + r.percent, 0) - ctx.before);
+      const taken = [...ctx.inputs.values()].reduce((s, el) => s + (Number(el.value) || 0), 0);
+      const lack = round(need(v) - free - taken), extra = round(taken - need(v));
+      ctx.rest.textContent = extra > 0 ? `${extra}% илүү байна` : lack > 0 ? `${lack}% дутуу байна` : '';
+    }
+  };
+}
+const investorBaseCfg = () => ({
   res: 'partners', title: 'Хөрөнгө оруулагчид', itemName: 'хөрөнгө оруулагч', addLabel: '+ Хөрөнгө оруулагч нэмэх', write: 'admin',
   columns: [
-    { k: 'name', label: 'Нэр' },
+    { k: 'name', label: 'Нэр', render: r => h('span', {}, r.name, r.is_owner ? h('span', {}, ' ', badge('approved', 'Эзэмшигч')) : null) },
     { k: 'phone', label: 'Утас' },
     { k: 'invested', label: 'Оруулсан хөрөнгө', f: 'money' },
     { k: 'percent', label: 'Ашгийн хувь', f: 'pct' },
@@ -2529,6 +2577,47 @@ async function membersSettings(box) {
     const dlg = modal(m ? 'Хэрэглэгчийн эрх' : 'Ферм рүү хэрэглэгч нэмэх', form);
   }
 
+  // Фермийг өөр хэрэглэгчид шилжүүлэх: утас → нэр харагдана → нууц үгээр баталгаажуулна
+  function openTransfer() {
+    const farm = state.lk.farm;
+    const phone = h('input', { type: 'tel', inputmode: 'numeric', required: true, maxlength: 12, autocomplete: 'off' });
+    const name = h('input', { readonly: true, tabindex: '-1' });
+    const pw = h('input', { type: 'password', required: true, autocomplete: 'current-password' });
+    const msg = h('div', { class: 'form-msg' });
+    const fail = t => { msg.className = 'form-msg err'; msg.textContent = t; };
+    let found = null;
+    const lookup = async () => {
+      found = null; name.value = ''; msg.className = 'form-msg'; msg.textContent = '';
+      const asked = phone.value.replace(/\D/g, '').replace(/^976(?=\d{8}$)/, '');
+      if (asked.length !== 8) return;
+      try {
+        const u = await api('GET', `/api/settings/lookup-user?phone=${asked}`);
+        if (phone.value.replace(/\D/g, '').endsWith(asked)) { found = u; name.value = u.name; }
+      } catch (e) { fail(e.message); }
+    };
+    phone.addEventListener('change', lookup);
+    const form = h('form', { class: 'modal-body' },
+      h('div', { class: 'form-grid' },
+        field('Шинэ эзэмшигчийн утас *', phone), field('Нэр', name),
+        h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Таны нууц үг *'), pw)),
+      msg,
+      h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
+        h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
+        h('button', { class: 'btn danger', type: 'submit' }, 'Шилжүүлэх')));
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (!found) await lookup();
+      if (!found) { if (!msg.textContent) fail('Шинэ эзэмшигчийн утсаа оруулна уу'); return; }
+      if (!confirm(`"${farm.name}" фермийг ${found.name} (${found.phone})-д шилжүүлэх үү?\n\nТа энэ фермд хандах эрхээ алдах бөгөөд эзэмшигчийн хөрөнгө оруулалтын хувь шинэ эзэмшигчид шилжинэ. Буцаах боломжгүй.`)) return;
+      try {
+        await api('POST', `/api/farms/${farm.id}/transfer`, { phone: found.phone, password: pw.value });
+        dlg.close(); setFarm(null); toast('Ферм шилжүүлэгдлээ'); location.hash = '#/farms';
+      } catch (ex) { fail(ex.message); }
+    });
+    const dlg = modal('Ферм шилжүүлэх', form);
+    phone.focus();
+  }
+
   box.replaceChildren(h('section', { class: 'card' },
     h('div', { class: 'toolbar' }, h('h2', {}, 'Фермийн хэрэглэгчид'),
       h('div', { class: 'toolbar-right' }, h('button', { class: 'btn primary small', type: 'button', onclick: () => openMember(null) }, '+ Хэрэглэгч нэмэх'))),
@@ -2536,13 +2625,15 @@ async function membersSettings(box) {
       h('thead', {}, h('tr', {}, ['Нэр', 'Утас', 'Эрх', 'Нэмсэн', ''].map(t => h('th', {}, t)))),
       h('tbody', {},
         h('tr', { class: 'owner-row' },
-          h('td', {}, h('strong', {}, state.lk.farm.owner_name || '')), h('td', {}, ''), h('td', {}, badge('approved', 'Эзэмшигч · бүрэн эрх')), h('td', {}, ''), h('td', {})),
+          h('td', {}, h('strong', {}, state.lk.farm.owner_name || '')), h('td', {}, state.lk.farm.owner_phone || ''),
+          h('td', {}, badge('approved', 'Үүсгэн байгуулагч · бүрэн эрх')), h('td', {}, FMT.dt(state.lk.farm.created_at)),
+          h('td', { class: 'row-actions' }, state.lk.farm.mine ? h('button', { type: 'button', class: 'btn ghost small', onclick: openTransfer }, 'Шилжүүлэх') : null)),
         members.map(m => h('tr', { class: 'clickable', onclick: () => openMember(m) },
           h('td', {}, m.name, m.status !== 'approved' ? h('span', {}, ' ', badge(m.status, STATUS_LABEL[m.status])) : null),
           h('td', {}, m.phone), h('td', {}, permSummary(m.perms)), h('td', {}, FMT.dt(m.created_at)),
           h('td', { class: 'row-actions' },
             h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); openMember(m); } }, 'Засах')))))))),
-    h('div', { class: 'table-foot' }, h('span', { class: 'muted small' }, members.length + ' гишүүн'))));
+    h('div', { class: 'table-foot' }, h('span', { class: 'muted small' }, (members.length + 1) + ' хэрэглэгч'))));
 }
 
 // Ерөнхий: фермийн нэр, тэмдэглэл (тэжээлийн төлөвлөгөөний тохиргоо "Тэжээл" хуудсанд байна)

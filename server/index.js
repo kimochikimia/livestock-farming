@@ -334,6 +334,9 @@ app.post('/api/farms', need('viewer'), async (req, res) => {
       [name, note, loc.aimag, loc.soum, loc.bag, color, req.user.id]);
     if (copyFrom) await copyFarmSettings(c, copyFrom.id, insertId);
     if (useTemplate) await applyTemplate(c, insertId);
+    // Ферм үүсгэсэн хүн 100%-ийн эзэмшигч хөрөнгө оруулагч болно (хувийг дараа нь засна)
+    await c.run('INSERT INTO partners(farm_id, name, phone, percent, user_id, is_owner) VALUES(?, ?, ?, 100, ?, 1)',
+      [insertId, req.user.name, req.user.phone, req.user.id]);
     return insertId;
   });
   await audit(req.user.id, 'Ферм үүсгэв', 'farms', id, name + (copyFrom ? ` (тохиргоог "${copyFrom.name}"-аас хуулсан)` : useTemplate ? ' (загвар тохиргоотой)' : ''), id);
@@ -365,6 +368,35 @@ app.delete('/api/farms/:id', need('viewer'), async (req, res) => {
   await db.run('DELETE FROM farms WHERE id = ?', [farm.id]); // бүх бүртгэл ON DELETE CASCADE-аар устна
   removePhotoFiles(photos);
   await audit(req.user.id, 'Ферм устгав', 'farms', farm.id, farm.name);
+  res.json({ ok: true });
+});
+
+// ---------- Фермийг өөр хэрэглэгчид шилжүүлэх (жишээ нь зарах үед) ----------
+// Зөвхөн одоогийн үүсгэн байгуулагч, нууц үгээ баталгаажуулж хийнэ. Шинэ эзэмшигч бүрэн эрхтэй болж,
+// хуучин эзэмшигч фермд хандах эрхээ алдана. Эзэмшигчийн хөрөнгө оруулалтын хувь шинэ эзэмшигчид шилжинэ.
+app.post('/api/farms/:id/transfer', authLimiter, need('viewer'), async (req, res) => {
+  const farm = await farmById(req);
+  if (farm.owner_id !== req.user.id) throw new HttpError(403, 'Зөвхөн үүсгэн байгуулагч шилжүүлж чадна');
+  const me = await db.one('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
+  if (!(await bcrypt.compare(String(req.body.password || ''), me.password_hash))) throw new HttpError(400, 'Нууц үг буруу байна');
+  const phone = checkPhone(req.body.phone);
+  const to = await db.one("SELECT id, name, phone FROM users WHERE phone = ? AND status = 'approved'", [phone]);
+  if (!to) throw new HttpError(404, 'Энэ дугаараар бүртгүүлсэн (баталгаажсан) хэрэглэгч олдсонгүй');
+  if (to.id === req.user.id) throw new HttpError(400, 'Өөртөө шилжүүлэх боломжгүй');
+  await db.tx(async c => {
+    await c.run('UPDATE farms SET owner_id = ? WHERE id = ?', [to.id, farm.id]);
+    await c.run('DELETE FROM farm_members WHERE farm_id = ? AND user_id = ?', [farm.id, to.id]);
+    const ownerRow = await c.one('SELECT id, percent, invested FROM partners WHERE farm_id = ? AND is_owner = 1', [farm.id]);
+    const toRow = await c.one('SELECT id, percent, invested FROM partners WHERE farm_id = ? AND user_id = ? AND is_owner = 0', [farm.id, to.id]);
+    if (ownerRow) {
+      // Шинэ эзэмшигч аль хэдийн хөрөнгө оруулагч бол хоёр мөрийг нэгтгэнэ
+      if (toRow) await c.run('DELETE FROM partners WHERE id = ?', [toRow.id]);
+      const invested = toRow && (ownerRow.invested != null || toRow.invested != null) ? (ownerRow.invested || 0) + (toRow.invested || 0) : ownerRow.invested;
+      await c.run('UPDATE partners SET name = ?, phone = ?, user_id = ?, percent = ?, invested = ? WHERE id = ?',
+        [to.name, to.phone, to.id, ownerRow.percent + (toRow?.percent || 0), invested, ownerRow.id]);
+    } else if (toRow) await c.run('UPDATE partners SET is_owner = 1 WHERE id = ?', [toRow.id]);
+  });
+  await audit(req.user.id, 'Ферм шилжүүлэв', 'farms', farm.id, `${farm.name} → ${to.name}`, farm.id);
   res.json({ ok: true });
 });
 
@@ -533,9 +565,9 @@ app.get('/api/lookups', async (req, res) => {
   for (const r of await db.q(`SELECT a.species, COUNT(*) n FROM animals a WHERE a.farm_id = ?
     AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') GROUP BY a.species`, [fid])) activeBySpecies[r.species] = r.n;
   const col = async (sql, params) => (await db.q(sql, params)).map(r => r.v);
-  const owner = await db.one('SELECT name FROM users WHERE id = ?', [req.farm.owner_id]);
+  const owner = await db.one('SELECT name, phone FROM users WHERE id = ?', [req.farm.owner_id]);
   res.json({
-    farm: { id: req.farm.id, name: req.farm.name, color: req.farm.color, note: req.farm.note, aimag: req.farm.aimag, soum: req.farm.soum, bag: req.farm.bag, owner_name: owner?.name, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
+    farm: { id: req.farm.id, name: req.farm.name, color: req.farm.color, note: req.farm.note, aimag: req.farm.aimag, soum: req.farm.soum, bag: req.farm.bag, owner_name: owner?.name, owner_phone: farmFull(req) ? owner?.phone : undefined, created_at: req.farm.created_at, mine: req.farm.owner_id === req.user.id, role: req.farmRole, full: farmFull(req) },
     species: SPECIES,
     sexes: SEXES,
     classes: await db.q('SELECT species, age_name, age, sex, target_weight FROM animal_classes WHERE farm_id = ? ORDER BY id', [fid]),
@@ -696,7 +728,8 @@ app.post('/api/r/:res', async (req, res) => {
   requirePerm(req, r.createModules?.(req.body) || r.module, r.settings ? 3 : 2);
   const v = validate(r.fields, req.body || {});
   const desc = describe(r, v);
-  if (r.prepare) await r.prepare(v, db, req.farm.id);
+  // prepare функц буцаавал бичлэгтэй нэг гүйлгээнд ажиллана (холбоотой өөрчлөлт)
+  const after = r.prepare ? await r.prepare(v, db, req.farm.id) : null;
   v.farm_id = req.farm.id;
   if (r.track) v.created_by = req.user.id;
   const list = r.expand ? r.expand(v, req.body || {}) : [v];
@@ -705,6 +738,7 @@ app.post('/api/r/:res', async (req, res) => {
   const ids = await db.tx(async c => {
     const out = [];
     for (const row of list) out.push((await c.run(sql, keys.map(k => row[k]))).insertId);
+    if (typeof after === 'function') await after(c);
     return out;
   });
   await farmAudit(req, 'Нэмэв', r.table, ids[0], desc + (ids.length > 1 ? ` (${ids.length} удаа)` : ''));
@@ -717,11 +751,14 @@ app.put('/api/r/:res/:id', async (req, res) => {
   const id = idParam(req);
   const v = validate(r.fields, req.body || {});
   const desc = describe(r, v);
-  if (r.prepare) await r.prepare(v, db, req.farm.id, id);
+  const after = r.prepare ? await r.prepare(v, db, req.farm.id, id) : null;
   const keys = Object.keys(v);
-  const info = await db.run(`UPDATE ${r.table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND farm_id = ?`,
-    [...keys.map(k => v[k]), id, req.farm.id]);
-  if (!info.changes) throw new HttpError(404, 'Бичлэг олдсонгүй');
+  await db.tx(async c => {
+    const info = await c.run(`UPDATE ${r.table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE id = ? AND farm_id = ?`,
+      [...keys.map(k => v[k]), id, req.farm.id]);
+    if (!info.changes) throw new HttpError(404, 'Бичлэг олдсонгүй');
+    if (typeof after === 'function') await after(c);
+  });
   await farmAudit(req, 'Засав', r.table, id, desc);
   res.json({ ok: true });
 });
