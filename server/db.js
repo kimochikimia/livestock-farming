@@ -240,6 +240,8 @@ async function init() {
       SELECT f.id, u.name, u.phone, 100, u.id, 1 FROM farms f JOIN users u ON u.id = f.owner_id
       WHERE NOT EXISTS (SELECT 1 FROM partners p WHERE p.farm_id = f.id)`);
   }
+  // Хөрөнгө оруулагчийн нэрийг бүртгэлтэй хэрэглэгчийн одоогийн нэрээр шинэчилнэ
+  await pool.query('UPDATE partners p JOIN users u ON u.id = p.user_id SET p.name = u.name WHERE p.name <> u.name');
   // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг

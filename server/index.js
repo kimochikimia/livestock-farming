@@ -484,6 +484,8 @@ app.patch('/api/admin/users/:id', need('admin'), async (req, res) => {
   const reviewed = status !== u.status;
   await db.run(`UPDATE users SET name = ?, role = ?, status = ?${reviewed ? ', reviewed_at = NOW(), reviewed_by = ?' : ''} WHERE id = ?`,
     reviewed ? [name, role, status, req.user.id, id] : [name, role, status, id]);
+  // Хөрөнгө оруулагчийн нэр хэрэглэгчийн нэртэй үргэлж ижил
+  if (name !== u.name) await db.run('UPDATE partners SET name = ? WHERE user_id = ?', [name, id]);
   if (status !== 'approved') await clearSessions(id);
   const what = [];
   if (status !== u.status) what.push(`төлөв: ${u.status} → ${status}`);
