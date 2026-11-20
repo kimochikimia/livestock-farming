@@ -390,7 +390,10 @@ app.post('/api/farms/:id/transfer', authLimiter, need('viewer'), async (req, res
     const toRow = await c.one('SELECT id, percent, invested FROM partners WHERE farm_id = ? AND user_id = ? AND is_owner = 0', [farm.id, to.id]);
     if (ownerRow) {
       // Шинэ эзэмшигч аль хэдийн хөрөнгө оруулагч бол хоёр мөрийг нэгтгэнэ
-      if (toRow) await c.run('DELETE FROM partners WHERE id = ?', [toRow.id]);
+      if (toRow) {
+        for (const t of ['expenses', 'animals']) await c.run(`UPDATE ${t} SET paid_by = ? WHERE farm_id = ? AND paid_by = ?`, [ownerRow.id, farm.id, toRow.id]);
+        await c.run('DELETE FROM partners WHERE id = ?', [toRow.id]);
+      }
       const invested = toRow && (ownerRow.invested != null || toRow.invested != null) ? (ownerRow.invested || 0) + (toRow.invested || 0) : ownerRow.invested;
       await c.run('UPDATE partners SET name = ?, phone = ?, user_id = ?, percent = ?, invested = ? WHERE id = ?',
         [to.name, to.phone, to.id, ownerRow.percent + (toRow?.percent || 0), invested, ownerRow.id]);
@@ -541,6 +544,9 @@ app.put('/api/settings', async (req, res) => {
       throw new HttpError(400, 'Тоон утга буруу байна');
     }
     if (k === 'plan_days' && !(Number(v) > 0)) throw new HttpError(400, 'Хоног 0-ээс их байх ёстой');
+    if (k === 'profit_mode' && !['percent', 'refund'].includes(v)) throw new HttpError(400, 'Хуваарилалтын арга буруу байна');
+    if (k === 'profit_tax' && !['0', '1'].includes(v)) throw new HttpError(400, 'Татварын тохиргоо буруу байна');
+    if (k === 'profit_tax_rate' && !(v !== '' && Number(v) >= 0 && Number(v) <= 100)) throw new HttpError(400, 'Татварын хувь 0-100 байна');
     updates.push([k, v]);
     changed.push(`${k}=${v}`);
   }
@@ -576,6 +582,8 @@ app.get('/api/lookups', async (req, res) => {
       expenseType: [...new Set([FEED_TYPE, ...await col('SELECT name AS v FROM expense_types WHERE farm_id = ? UNION SELECT DISTINCT type FROM expenses WHERE farm_id = ? ORDER BY 1', [fid, fid])])],
       // Зардлын "Тэжээл" төрлийн дэд төрөл (Тохиргоо → Тэжээл)
       feeds: await db.q('SELECT name, price, bale_kg FROM feeds WHERE farm_id = ? ORDER BY id', [fid]),
+      // Зардал төлсөн хөрөнгө оруулагчийн сонголт
+      partners: await db.q('SELECT id, name, is_owner FROM partners WHERE farm_id = ? ORDER BY is_owner DESC, id', [fid]),
       ageName: await col('SELECT age_name AS v FROM animal_classes WHERE farm_id = ? UNION SELECT DISTINCT age_name FROM animals WHERE farm_id = ? AND age_name IS NOT NULL ORDER BY 1', [fid, fid]),
       age: await col('SELECT age AS v FROM animal_classes WHERE farm_id = ? UNION SELECT DISTINCT age FROM animals WHERE farm_id = ? AND age IS NOT NULL ORDER BY 1', [fid, fid]),
       tagColor: await col('SELECT name AS v FROM tag_colors WHERE farm_id = ? ORDER BY id', [fid]),
@@ -620,7 +628,21 @@ app.get('/api/dashboard', async (req, res) => {
     kg: saleRows.reduce((s, r) => s + (r.price != null ? (r.sold_weight ?? r.shipped_weight) : (r.sold_weight || 0)), 0)
   };
   const profit = sales.t - expenseTotal;
-  const partners = (await db.q('SELECT * FROM partners WHERE farm_id = ? ORDER BY id', [fid])).map(p => ({ ...p, amount: profit * p.percent / 100 }));
+  // Хөрөнгө оруулагч бүрийн төлсөн зардал (гараар бүртгэсэн + "Мал авсан")
+  const paid = new Map((await db.q('SELECT paid_by, SUM(COALESCE(qty,0) * COALESCE(unit_price,0)) t FROM expenses WHERE farm_id = ? AND paid_by IS NOT NULL GROUP BY paid_by', [fid])).map(r => [r.paid_by, Number(r.t) || 0]));
+  for (const r of animalExp) if (r.paid_by) paid.set(r.paid_by, (paid.get(r.paid_by) || 0) + r.total);
+  // Ашиг хуваарилалт: татвар (сонгосон бол, эерэг ашгаас) хасаад цэвэр ашгийг хувиар хуваана.
+  // "refund" горимд хөрөнгө оруулагч бүрт төлсөн зардлыг нь эхлээд буцааж олгоно (үлдэгдэл = цэвэр ашиг)
+  const st = await getSettings(fid);
+  const taxRate = st.profit_tax === '1' ? Number(st.profit_tax_rate) || 0 : 0;
+  const tax = Math.max(0, profit) * taxRate / 100;
+  const netProfit = profit - tax;
+  const refund = st.profit_mode === 'refund';
+  const distribution = { mode: refund ? 'refund' : 'percent', taxOn: st.profit_tax === '1', taxRate: Number(st.profit_tax_rate) || 0, tax, netProfit };
+  const partners = (await db.q('SELECT * FROM partners WHERE farm_id = ? ORDER BY id', [fid])).map(p => {
+    const pd = paid.get(p.id) || 0, share = netProfit * p.percent / 100;
+    return { ...p, paid: pd, share, refund: refund ? pd : 0, amount: share + (refund ? pd : 0) };
+  });
   const animals = await resources.animals.list(db, fid);
   const stats = { total: animals.length, active: 0, slaughtered: 0, sold: 0, ready: 0, costTotal: 0 };
   const bySpecies = {};
@@ -681,7 +703,7 @@ app.get('/api/dashboard', async (req, res) => {
   const monthly = months.map(m => ({ month: m, expense: (expM.find(r => r.m === m)?.v || 0) + (animalM[m] || 0), revenue: revM.find(r => r.m === m)?.v || 0 }));
 
   res.json({
-    expenseTotal, byType, salesTotal: sales.t, salesKg: sales.kg, profit, partners, stats, bySpecies, ready, recentWeighings, upcomingTasks,
+    expenseTotal, byType, salesTotal: sales.t, salesKg: sales.kg, profit, distribution, partners, stats, bySpecies, ready, recentWeighings, upcomingTasks,
     herd, monthly, attention: { needWeigh, behind, slaughterSoon, noCarcass, tasksOverdue }
   });
 });

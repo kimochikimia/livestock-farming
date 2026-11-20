@@ -221,7 +221,7 @@ function assertFeedBalance(name, buckets, msg) {
 // ---------- Худалдаж авсан мал = "Мал авсан" зардал (малын бүртгэлээс автоматаар, давхар бичлэггүй) ----------
 const ANIMAL_EXPENSE_TYPE = 'Мал авсан';
 async function animalPurchaseExpenses(db, farmId) {
-  const rows = await db.q(`SELECT id, tag_id, species, age_name, purchase_date, purchase_price, transport_cost, other_cost
+  const rows = await db.q(`SELECT id, tag_id, species, age_name, purchase_date, purchase_price, transport_cost, other_cost, paid_by
     FROM animals WHERE farm_id = ? AND source = 'Худалдаж авсан'
       AND (purchase_price IS NOT NULL OR transport_cost IS NOT NULL OR other_cost IS NOT NULL)`, [farmId]);
   return rows.map(a => {
@@ -229,9 +229,15 @@ async function animalPurchaseExpenses(db, farmId) {
     return {
       id: 'animal-' + a.id, auto: 'animal', animal_id: a.id, date: a.purchase_date, type: ANIMAL_EXPENSE_TYPE, feed_name: null,
       description: [a.tag_id, a.species, a.age_name].filter(Boolean).join(' · '),
-      qty: 1, unit: 'толгой', unit_price: total, total, supplier: null
+      qty: 1, unit: 'толгой', unit_price: total, total, supplier: null, paid_by: a.paid_by
     };
   });
+}
+
+// Төлсөн хөрөнгө оруулагч (partners.id) тухайн фермийнх эсэхийг шалгана
+async function checkPaidBy(v, db, farmId) {
+  if (v.paid_by == null) return;
+  if (!await db.one('SELECT 1 x FROM partners WHERE id = ? AND farm_id = ?', [v.paid_by, farmId])) throw new HttpError(400, 'Төлсөн хөрөнгө оруулагч олдсонгүй');
 }
 
 // Эзэмшигчээс бусад хөрөнгө оруулагчдын нийт хувь (exceptId мөрийг оруулахгүй)
@@ -255,6 +261,7 @@ const resources = {
       tag_color: { t: 'text', max: 50, label: 'ID өнгө' },
       initial_weight: { t: 'num', max: 5000, label: 'Анхны жин' },
       purchase_price: { t: 'num', label: 'Авсан үнэ' },
+      paid_by: { t: 'int', min: 1, label: 'Төлсөн' },
       note: { t: 'text', max: 1000, label: 'Тэмдэглэл' },
       goal_weight: { t: 'num', max: 5000, label: 'Зорилтот жин' },
       goal_days: { t: 'int', min: 1, max: 3650, label: 'Хугацаа (хоног)' }
@@ -263,7 +270,8 @@ const resources = {
     async prepare(v, db, farmId) {
       if (v.source !== 'Төл') v.mother_tag = null;
       if (v.source !== 'Бэлэг') v.market_value = null;
-      if (v.source !== 'Худалдаж авсан') v.purchase_price = null;
+      if (v.source !== 'Худалдаж авсан') { v.purchase_price = null; v.paid_by = null; }
+      await checkPaidBy(v, db, farmId);
       if (v.source === 'Төл') {
         if (!v.mother_tag) throw new HttpError(400, 'Төлийн эх малын ID-г оруулна уу');
         if (v.tag_id && v.mother_tag.toLowerCase() === String(v.tag_id).toLowerCase()) throw new HttpError(400, 'Мал өөрөө өөрийнхөө эх байж болохгүй');
@@ -348,11 +356,13 @@ const resources = {
       qty: { t: 'num', label: 'Тоо' },
       unit_price: { t: 'num', label: 'Нэгж үнэ' },
       supplier: { t: 'text', max: 200, label: 'Нийлүүлэгч' },
+      paid_by: { t: 'int', min: 1, label: 'Төлсөн' },
       related_ref: { t: 'text', max: 40, label: 'Холбогдох зардал' }
     },
     // "Тэжээл" төрөл → дэд төрөл нь Тохиргоо → Тэжээл-ийн нэр, хэмжээ (кг) заавал; бусад төрөлд дэд төрөлгүй.
     // Засварлахад тэжээлийн үлдэгдэл хасах руу орохгүй байхыг шалгана.
     async prepare(v, db, farmId, id) {
+      await checkPaidBy(v, db, farmId);
       if (v.type !== FEED_TYPE) { v.feed_name = null; v.unit = null; }
       else {
         if (!v.feed_name) throw new HttpError(400, 'Тэжээлийн төрлийг сонгоно уу');
@@ -403,6 +413,8 @@ const resources = {
     async list(db, farmId) {
       const own = await db.q('SELECT *, COALESCE(qty, 0) * COALESCE(unit_price, 0) AS total FROM expenses WHERE farm_id = ? ORDER BY date DESC, id DESC', [farmId]);
       const all = [...own, ...await animalPurchaseExpenses(db, farmId)];
+      const payer = new Map((await db.q('SELECT id, name FROM partners WHERE farm_id = ?', [farmId])).map(p => [p.id, p.name]));
+      for (const e of all) e.paid_by_name = payer.get(e.paid_by) || null;
       const byRef = new Map(all.map(e => [String(e.id), e]));
       for (const e of own) {
         const p = e.related_ref ? byRef.get(e.related_ref) : null;
@@ -789,6 +801,9 @@ const resources = {
     },
     // Хөрөнгө оруулагчийг устгахад түүний хувь эзэмшигчид буцна
     async beforeDelete(old, db, farmId) {
+      if (await db.one('SELECT 1 x FROM expenses WHERE farm_id = ? AND paid_by = ? UNION SELECT 1 FROM animals WHERE farm_id = ? AND paid_by = ? LIMIT 1', [farmId, old.id, farmId, old.id])) {
+        throw new HttpError(409, `${old.name} зардал төлсөн бүртгэлтэй тул устгах боломжгүй`);
+      }
       if (old.is_owner) return;
       const ownerRow = await db.one('SELECT id, percent FROM partners WHERE farm_id = ? AND is_owner = 1', [farmId]);
       if (!ownerRow) return;

@@ -1158,13 +1158,45 @@ PAGES.dashboard = async main => {
         sortableTable({ class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', { class: 'num' }, 'Жин'))),
           h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null),
-    d.partners.length ? h('section', { class: 'card' },
-      h('div', { class: 'toolbar' }, h('h2', {}, 'Хөрөнгө оруулагчдын ашиг'), farmFull() ? h('a', { class: 'btn ghost small', href: '#/settings?tab=general' }, 'Удирдах') : null),
-      sortableTable({ class: 'data compact' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', {}, 'Олгох давтамж'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Ашгийн дүн'))),
-        h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name, investorState(p) !== 'Хүчинтэй' ? h('span', {}, ' ', badge(investorState(p))) : null),
-          h('td', {}, p.payout_period || ''), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.amount))))))) : null);
+    d.partners.length ? partnerProfitCard(d, () => PAGES.dashboard(main)) : null);
 };
+
+// Хөрөнгө оруулагчдын ашиг: хуваарилалтын арга (хувиар / зардлыг буцааж) ба татвар тооцох эсэх
+function partnerProfitCard(d, rerender) {
+  const D = d.distribution;
+  const refund = D.mode === 'refund';
+  const save = async body => {
+    try { await api('PUT', '/api/settings', body); await rerender(); } catch (e) { alert(e.message); await rerender(); }
+  };
+  const full = farmFull();
+  const mode = h('select', { disabled: !full, onchange: e => save({ profit_mode: e.target.value }) },
+    [['percent', 'Ашгаас шууд хувиар'], ['refund', 'Төлсөн зардлыг буцааж, үлдэгдлийг хувиар']]
+      .map(([v, l]) => h('option', { value: v, selected: v === D.mode }, l)));
+  const taxCb = h('input', { type: 'checkbox', disabled: !full, onchange: e => save({ profit_tax: e.target.checked ? '1' : '0' }) });
+  taxCb.checked = D.taxOn;
+  const rate = D.taxOn ? h('input', { type: 'number', min: 0, max: 100, step: 'any', value: D.taxRate, disabled: !full, style: 'width:70px',
+    onchange: e => save({ profit_tax_rate: e.target.value }) }) : null;
+  const sumOf = k => d.partners.reduce((s, p) => s + (p[k] || 0), 0);
+  return h('section', { class: 'card' },
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Хөрөнгө оруулагчдын ашиг'),
+      h('div', { class: 'toolbar-right' }, mode,
+        h('label', { class: 'chip' }, taxCb, 'Татвар тооцох'), rate ? h('span', {}, rate, ' %') : null,
+        full ? h('a', { class: 'btn ghost small', href: '#/settings?tab=general' }, 'Удирдах') : null)),
+    h('p', { class: 'small', style: 'margin:0 0 8px' },
+      h('span', {}, 'Ашиг ', h('b', {}, FMT.money(d.profit))),
+      D.taxOn ? h('span', {}, ` · Татвар (${D.taxRate}%) `, h('b', {}, FMT.money(D.tax))) : null,
+      D.taxOn ? h('span', {}, ' · Татварын дараах ашиг ', h('b', {}, FMT.money(D.netProfit))) : null),
+    sortableTable({ class: 'data compact' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', {}, 'Олгох давтамж'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Төлсөн зардал'),
+        refund ? h('th', { class: 'num' }, 'Буцаан олгох') : null, h('th', { class: 'num' }, 'Ашгийн дүн'), refund ? h('th', { class: 'num' }, 'Нийт олгох') : null)),
+      h('tbody', {}, d.partners.map(p => h('tr', {}, h('td', {}, p.name, investorState(p) !== 'Хүчинтэй' ? h('span', {}, ' ', badge(investorState(p))) : null),
+        h('td', {}, p.payout_period || ''), h('td', { class: 'num' }, FMT.pct(p.percent)), h('td', { class: 'num' }, FMT.money(p.paid)),
+        refund ? h('td', { class: 'num' }, FMT.money(p.refund)) : null, h('td', { class: 'num' }, FMT.money(p.share)),
+        refund ? h('td', { class: 'num' }, h('b', {}, FMT.money(p.amount))) : null))),
+      h('tfoot', {}, h('tr', {}, h('td', {}, 'Нийт'), h('td', {}), h('td', { class: 'num' }, FMT.pct(sumOf('percent'))), h('td', { class: 'num' }, FMT.money(sumOf('paid'))),
+        refund ? h('td', { class: 'num' }, FMT.money(sumOf('refund'))) : null, h('td', { class: 'num' }, FMT.money(sumOf('share'))),
+        refund ? h('td', { class: 'num' }, FMT.money(sumOf('amount'))) : null))));
+}
 
 PAGES.animals = main => {
   const cfg = {
@@ -1200,6 +1232,7 @@ PAGES.animals = main => {
       options: () => opt(ANIMAL_SOURCES), onChange: fillCalf },
     { k: 'purchase_date', label: 'Орлогын огноо', type: 'date', req: true, third: true, def: today },
     { k: 'purchase_price', label: 'Авсан үнэ ₮', type: 'number', third: true, showIf: v => v.source === 'Худалдаж авсан' },
+    { ...PAID_BY_FIELD, full: false, third: true, showIf: v => v.source === 'Худалдаж авсан' },
     { k: 'market_value', label: 'Зах зээлийн үнэ ₮', type: 'number', third: true, showIf: v => v.source === 'Бэлэг' },
     { k: '_animal', type: 'section', label: 'Мал' },
     { k: '_animal_photos', type: 'photos', label: 'Малын зураг' },
@@ -1711,6 +1744,11 @@ function expenseBoard(rows) {
   ];
 }
 
+// Зардлыг аль хөрөнгө оруулагч төлсөн (ашиг хуваарилалтад) — анхдагч нь фермийн эзэмшигч
+const PAID_BY_FIELD = { k: 'paid_by', label: 'Төлсөн хөрөнгө оруулагч', type: 'select', full: true,
+  options: () => (state.lk.suggest.partners || []).map(p => [p.id, p.name]),
+  def: () => (state.lk.suggest.partners || []).find(p => p.is_owner)?.id ?? '' };
+
 // Зардлын жагсаалт (холбогдох зардлын сонголтод ашиглана) — самбар шинэчлэгдэх бүрт
 let expenseRows = [];
 const expenseLabel = r => [r.date, r.type, r.feed_name, r.description, r.supplier, FMT.money(r.total)].filter(Boolean).join(' · ');
@@ -1719,7 +1757,7 @@ const addLinkedBtn = (r, refresh) => (!r.related_ref && canMod('expenses', 2)
   ? h('button', { type: 'button', class: 'btn ghost small', onclick: e => {
     e.stopPropagation();
     openForm(EXPENSE_CFG, null, refresh, canMod('expenses', 3),
-      { type: 'Тээвэр', related_ref: String(r.id), date: r.date, description: `${r.feed_name || r.description || r.type} тээвэр` });
+      { type: 'Тээвэр', related_ref: String(r.id), date: r.date, paid_by: r.paid_by ?? undefined, description: `${r.feed_name || r.description || r.type} тээвэр` });
   } }, '+ Тээвэр') : null);
 const EXPENSE_CFG = {
   res: 'expenses', module: 'expenses', photos: true, title: 'Зардлын бүртгэл', itemName: 'зардал', addLabel: '+ Зардал нэмэх',
@@ -1738,6 +1776,7 @@ const EXPENSE_CFG = {
     { k: 'qty', label: 'Тоо', f: 'num', render: r => qtyUnit(r.qty, r.unit), csv: r => qtyUnit(r.qty, r.unit) },
     { k: 'unit_price', label: 'Нэгж үнэ', f: 'money' },
     { k: 'total', label: 'Нийт', f: 'money' }, { k: 'supplier', label: 'Нийлүүлэгч', cls: 'wrap-cell' },
+    { k: 'paid_by_name', label: 'Төлсөн', cls: 'wrap-cell' },
     // Холбоос: нэмэлт зардал → үндсэн зардал; үндсэн зардал → нэмэлт зардлын нийлбэр
     { k: 'related_label', label: 'Холбогдох зардал', cls: 'wrap-cell wide',
       render: r => (r.related_label ? h('span', { class: 'muted small' }, '↳ ' + r.related_label)
@@ -1745,7 +1784,7 @@ const EXPENSE_CFG = {
       csv: r => r.related_label || (r.linked_total ? `+${r.linked_total}` : '') }
   ],
   totals: ['total'],
-  filters: [{ k: 'type', label: 'Төрөл', options: rows => uniq(rows, 'type') }],
+  filters: [{ k: 'type', label: 'Төрөл', options: rows => uniq(rows, 'type') }, { k: 'paid_by_name', label: 'Төлсөн', options: rows => uniq(rows, 'paid_by_name') }],
   fields: [
     { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
     { k: 'type', label: 'Зардлын төрөл', req: true, maxlength: 100, suggest: () => state.lk.suggest.expenseType.filter(t => t !== FEED_TYPE) },
@@ -1763,7 +1802,8 @@ const EXPENSE_CFG = {
     { k: 'description', label: 'Зардлын тайлбар', full: true },
     { k: 'qty', label: 'Тоо', type: 'number' },
     { k: 'unit_price', label: 'Нэгж үнэ ₮', type: 'number' },
-    { k: 'supplier', label: 'Нийлүүлэгч', full: true, suggest: () => state.lk.suggest.supplier }
+    { k: 'supplier', label: 'Нийлүүлэгч', full: true, suggest: () => state.lk.suggest.supplier },
+    PAID_BY_FIELD
   ]
 };
 PAGES.expenses = main => crudWithBoard(main, EXPENSE_CFG, rows => { expenseRows = rows; return expenseBoard(rows); });
@@ -2201,6 +2241,7 @@ PAGES.feed = async main => {
       { k: 'total_info', label: 'Нийт үнэ', type: 'info',
         compute: v => (Number(v.qty) > 0 && Number(v.unit_price) > 0 ? FMT.money(Number(v.qty) * Number(v.unit_price)) : null) },
       { k: 'supplier', label: 'Нийлүүлэгч', full: true, suggest: () => state.lk.suggest.supplier },
+      PAID_BY_FIELD,
       { k: 'description', label: 'Тайлбар', full: true }
     ]
   };

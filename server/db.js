@@ -228,6 +228,9 @@ async function init() {
   // Бой: бойнд орох (төлөвлөсөн) огноо ба бойнд орсон (бодит) огноо. date = бодит || төлөвлөсөн
   // Зардал: өөр зардалтай холбох (тэжээлийн тээвэр → тэжээл, малын тээвэр → "Мал авсан"): "16" эсвэл "animal-33"
   await ensureColumn('expenses', 'related_ref', 'VARCHAR(40) NULL');
+  // Зардлыг аль хөрөнгө оруулагч төлсөн (partners.id) — ашиг хуваарилалтад ашиглана
+  await ensureColumn('expenses', 'paid_by', 'INT NULL');
+  await ensureColumn('animals', 'paid_by', 'INT NULL');
   // Хөрөнгө оруулагч = вэбд бүртгэлтэй хэрэглэгч (утасны дугаараар холбоно)
   await ensureColumn('partners', 'user_id', 'INT NULL');
   // Фермийн эзэмшигч = анхдагч хөрөнгө оруулагч (100%). Багана шинээр нэмэгдэх үед л нэг удаа:
@@ -274,7 +277,10 @@ const SETTING_DEFAULTS = {
   plan_days: '90',               // Тэжээлийн төлөвлөгөөний хоног
   plan_other_budget: '',         // Маллагаа, ус, мал эмнэлэг бусад зардлын төсөв (1 толгой)
   plan_species: 'Үхэр',          // Төлөвлөгөө аль төрлийн малд
-  plan_head_count: ''            // Хоосон бол идэвхтэй малын тоогоор автоматаар
+  plan_head_count: '',           // Хоосон бол идэвхтэй малын тоогоор автоматаар
+  profit_mode: 'percent',        // Ашиг хуваарилалт: percent — ашгаас шууд хувиар; refund — төлсөн зардлыг буцааж, үлдэгдлийг хувиар
+  profit_tax: '0',               // 1 — ашгаас татвар хасна
+  profit_tax_rate: '10'          // Татварын хувь (%)
 };
 const SETTING_KEYS = Object.keys(SETTING_DEFAULTS);
 
