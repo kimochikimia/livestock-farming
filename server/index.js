@@ -8,7 +8,7 @@ const cookieParser = require('cookie-parser');
 const { rateLimit } = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
 const { db, init, audit, getSettings, setSetting, SETTING_KEYS, ensureAdmin, UPLOAD_DIR, copyFarmSettings } = require('./db');
-const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE, animalPurchaseExpenses, meatStock } = require('./resources');
+const { resources, validate, HttpError, mapDbError, SPECIES, SEXES, FEED_TYPE, animalPurchaseExpenses, meatStock, withCurrentAgeName } = require('./resources');
 const { applyTemplate } = require('./template');
 
 const PROD = process.env.NODE_ENV === 'production';
@@ -572,6 +572,15 @@ app.get('/api/lookups', async (req, res) => {
   const activeBySpecies = Object.fromEntries(SPECIES.map(s => [s, 0]));
   for (const r of await db.q(`SELECT a.species, COUNT(*) n FROM animals a WHERE a.farm_id = ?
     AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') GROUP BY a.species`, [fid])) activeBySpecies[r.species] = r.n;
+  // Идэвхтэй мал: төрөл × одоогийн насны нэршил × хүйсээр (тэжээлийн төлөвлөгөөний толгойн тоо)
+  const activeRows = await db.q(`SELECT a.id AS animal_id, a.species, a.sex FROM animals a WHERE a.farm_id = ?
+    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')`, [fid]);
+  const byClass = new Map();
+  for (const a of await withCurrentAgeName(db, fid, activeRows)) {
+    const k = [a.species, a.age_name || '', a.sex || ''].join('|');
+    byClass.set(k, (byClass.get(k) || 0) + 1);
+  }
+  const activeByClass = [...byClass].map(([k, n]) => { const [species, age_name, sex] = k.split('|'); return { species, age_name, sex, n }; });
   const col = async (sql, params) => (await db.q(sql, params)).map(r => r.v);
   const owner = await db.one('SELECT name, phone FROM users WHERE id = ?', [req.farm.owner_id]);
   res.json({
@@ -602,6 +611,7 @@ app.get('/api/lookups', async (req, res) => {
     tasksDue: (await db.one("SELECT COUNT(*) n FROM tasks WHERE farm_id = ? AND status = 'Төлөвлөсөн' AND date <= CURDATE()", [fid])).n,
     shipDates: await col('SELECT DISTINCT shipped_date AS v FROM slaughters WHERE farm_id = ? AND shipped_date IS NOT NULL ORDER BY v DESC', [fid]),
     activeBySpecies,
+    activeByClass,
     settings: await getSettings(fid),
     perms: Object.fromEntries(MODULES.map(m => [m, permLevel(req, m)])),
     pendingUsers: req.user.role === 'admin' ? (await db.one("SELECT COUNT(*) n FROM users WHERE status = 'pending'")).n : 0

@@ -46,7 +46,7 @@ async function applyTemplate(c, farmId) {
     for (const r of BREEDING) count('breeding', (await c.run('INSERT INTO breeding(farm_id, species, dam_name, births_per_year, gestation, breeding_months, birthing_months) VALUES(?, ?, ?, ?, ?, ?, ?)', [farmId, ...r])).changes);
   }
   if (!(await c.one('SELECT 1 x FROM feed_plan WHERE farm_id = ? LIMIT 1', [farmId]))) {
-    for (const r of FEED_PLAN) count('feed_plan', (await c.run('INSERT INTO feed_plan(farm_id, feed_name, kg_1_14, kg_15_30, kg_31_90, price) VALUES(?, ?, ?, ?, ?, ?)', [farmId, ...r])).changes);
+    for (const r of FEED_PLAN) count('feed_plan', (await c.run('INSERT INTO feed_plan(farm_id, species, feed_name, kg_1_14, kg_15_30, kg_31_90, price) VALUES(?, ?, ?, ?, ?, ?, ?)', [farmId, 'Үхэр', ...r])).changes);
   }
   for (const [k, v] of Object.entries(SETTINGS)) {
     await c.run('INSERT IGNORE INTO farm_settings(farm_id, skey, value) VALUES(?, ?, ?)', [farmId, k, v]);

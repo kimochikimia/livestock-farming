@@ -133,7 +133,7 @@ const NAV = [
   { group: 'feedgroup', farm: true, label: 'Тэжээл', icon: '❦' },
   { path: 'feed', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн бүртгэл', permLabel: 'Тэжээл', icon: '▤' },
   { path: 'feedusage', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээл зарцуулалт', icon: '⊖' },
-  { path: 'feedcalc', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн төлөвлөлт', icon: '∑' },
+  { path: 'feedcalc', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээл төлөвлөлт', icon: '∑' },
   // Бойны бүртгэл: зарахад бэлэн → бойн хуваарь → гулууз → мах ачилт (хуучин 3 цэсийг нэгтгэсэн)
   { path: 'slaughter', farm: true, module: 'slaughter', label: 'Бойны бүртгэл', icon: '▤' },
   // "Санхүү" бүлэг: орлого (борлуулалт) ба зарлага
@@ -143,13 +143,13 @@ const NAV = [
   { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
   // Зах зээлийн судалгаа → Тохиргоо → "Зах зээл" таб
   { path: 'settings', farm: true, full: true, label: 'Тохиргоо', icon: '⚙' },
+  { section: 'Миний' },
+  { path: 'farms', label: 'Миний фермүүд', icon: '⌂' },
+  { path: 'profile', label: 'Миний бүртгэл', icon: '◎' },
   { section: 'Админ', min: 'admin' },
   { path: 'users', label: 'Хэрэглэгчид', icon: '☺', min: 'admin', badge: () => state.pendingUsers },
   { path: 'news', label: 'Мэдээ', icon: '✎', min: 'admin' },
-  { path: 'audit', label: 'Үйлдлийн түүх', icon: '☰', min: 'admin' },
-  { section: 'Миний' },
-  { path: 'farms', label: 'Миний фермүүд', icon: '⌂' },
-  { path: 'profile', label: 'Миний бүртгэл', icon: '◎' }
+  { path: 'audit', label: 'Үйлдлийн түүх', icon: '☰', min: 'admin' }
 ];
 const currentPath = () => (location.hash.replace(/^#\/?/, '').split('?')[0] || '');
 const navAllowed = n => (n.farm && !state.lk ? false : n.full && !farmFull() ? false : n.module ? canMod(n.module, 1) : (!n.min || can(n.min)));
@@ -472,7 +472,7 @@ const sortableTable = (attrs, ...kids) => enhanceTable(h('table', attrs, ...kids
         write, filters:[{k,label,options}], totals:[k], onChange, addLabel, empty }
 */
 async function crudSection(container, cfg) {
-  const rows = await api('GET', '/api/r/' + cfg.res);
+  const rows = (await api('GET', '/api/r/' + cfg.res)).filter(cfg.rowFilter || (() => true));
   if (cfg.photos && !cfg._photoCol) { cfg.columns = [photoColumn(cfg.res), ...cfg.columns]; cfg._photoCol = true; }
   const canWrite = !cfg.readonly && (cfg.module ? canMod(cfg.module, 2) : farmFull());
   const canDel = cfg.module ? canMod(cfg.module, 3) : farmFull();
@@ -2298,14 +2298,41 @@ PAGES.feedusage = async main => {
   });
 };
 
-// ----- Тэжээл → Тэжээлийн төлөвлөлт: өртгийн тооцоо, төлөвлөгөө, жор -----
+// ----- Тэжээл → Тэжээл төлөвлөлт: өртгийн тооцоо, төлөвлөгөө, жор -----
+// Сонгосон төлөвлөгөө: малын төрөл, насны нэршил, хүйс ('' = бүгд), малын тоо (null = идэвхтэй малын тоо)
+let feedPlanSel = null;
 PAGES.feedcalc = async main => {
   const s = state.lk.settings;
-  const summaryBox = h('div'); const planBox = h('div'); const recipeBox = h('div');
-  main.replaceChildren(summaryBox, planBox, recipeBox);
+  const sel = feedPlanSel || (feedPlanSel = { species: s.plan_species || state.lk.species[0], age_name: '', sex: '', heads: null });
+  const selBox = h('div'); const summaryBox = h('div'); const planBox = h('div'); const recipeBox = h('div');
+  main.replaceChildren(selBox, summaryBox, planBox, recipeBox);
   const rerender = async () => { await loadLookups(); await PAGES.feedcalc(main); };
+  const redraw = () => PAGES.feedcalc(main);
+
+  // Малын төрөл → насны нэршил → хүйс сонгоход тухайн ангиллын төлөвлөгөө гарна
+  const classesOf = () => state.lk.classes.filter(c => c.species === sel.species);
+  const ageNames = [...new Set(classesOf().map(c => c.age_name))];
+  const sexes = [...new Set(classesOf().filter(c => !sel.age_name || c.age_name === sel.age_name).map(c => c.sex))];
+  const autoHeads = (state.lk.activeByClass || []).filter(c => c.species === sel.species
+    && (!sel.age_name || c.age_name === sel.age_name) && (!sel.sex || c.sex === sel.sex)).reduce((a, c) => a + c.n, 0);
+  const heads = sel.heads ?? autoHeads;
+  const pick = (label, value, opts, onchange) => field(label, h('select', { onchange: e => onchange(e.target.value) },
+    opts.map(([v, l]) => h('option', { value: v, selected: v === value }, l))));
+  const headInput = numberInput({}, heads);
+  headInput.addEventListener('change', () => { const n = headInput.value; sel.heads = n === '' ? null : Number(n); redraw(); });
+  selBox.replaceChildren(h('section', { class: 'card' },
+    h('div', { class: 'form-grid' },
+      pick('Малын төрөл', sel.species, state.lk.species.map(x => [x, x]), v => { Object.assign(sel, { species: v, age_name: '', sex: '', heads: null }); redraw(); }),
+      pick('Насны нэршил', sel.age_name, [['', 'Бүгд'], ...ageNames.map(x => [x, x])], v => { Object.assign(sel, { age_name: v, sex: '', heads: null }); redraw(); }),
+      pick('Хүйс', sel.sex, [['', 'Бүгд'], ...sexes.map(x => [x, x])], v => { Object.assign(sel, { sex: v, heads: null }); redraw(); }),
+      field('Малын тоо', headInput))));
+
+  const selName = [sel.species, sel.age_name, sel.sex].filter(Boolean).join(' · ');
+  const inSel = r => r.species === sel.species && (r.age_name || '') === sel.age_name && (r.sex || '') === sel.sex;
   await crudSection(planBox, {
-    res: 'feed_plan', title: `Тэжээлийн төлөвлөгөө (1 толгой, ${s.plan_days} хоног)`, itemName: 'тэжээл', module: 'feed', rowActions: true, onChange: rerender,
+    res: 'feed_plan', title: `Тэжээлийн төлөвлөгөө: ${selName} (1 толгой, ${s.plan_days} хоног)`, itemName: 'тэжээл', module: 'feed', rowActions: true, onChange: rerender,
+    rowFilter: inSel, fixed: { species: sel.species, age_name: sel.age_name || null, sex: sel.sex || null },
+    addLabel: '+ Тэжээл нэмэх', empty: 'Тэжээл нэмээгүй байна',
     columns: [
       { k: 'feed_name', label: 'Тэжээлийн төрөл' }, { k: 'kg_1_14', label: '1–14 хоног', f: 'kg' },
       { k: 'kg_15_30', label: '15–30 хоног', f: 'kg' }, { k: 'kg_31_90', label: '31–90 хоног', f: 'kg' },
@@ -2313,18 +2340,19 @@ PAGES.feedcalc = async main => {
     ],
     totals: ['kg_1_14', 'kg_15_30', 'kg_31_90', 'total_kg', 'cost'],
     fields: [
-      { k: 'feed_name', label: 'Тэжээлийн төрөл', req: true, full: true, suggest: () => state.lk.suggest.feedName },
+      { k: 'feed_name', label: 'Тэжээлийн төрөл', type: 'select', req: true, full: true,
+        options: () => state.lk.suggest.feeds.map(f => [f.name, f.name]),
+        emptyText: () => 'Тохиргоо → Тэжээл хоосон байна' },
+      { k: 'price_info', label: 'Нэг кг үнэ', type: 'info',
+        compute: v => { const f = state.lk.suggest.feeds.find(x => x.name === v.feed_name); return f?.price != null ? FMT.money(f.price) : null; } },
       { k: 'kg_1_14', label: '1–14 хоног (кг/өдөр)', type: 'number' },
       { k: 'kg_15_30', label: '15–30 хоног (кг/өдөр)', type: 'number' },
-      { k: 'kg_31_90', label: '31–90 хоног (кг/өдөр)', type: 'number' },
-      { k: 'price', label: 'Нэг кг үнэ ₮', type: 'number' }
+      { k: 'kg_31_90', label: '31–90 хоног (кг/өдөр)', type: 'number' }
     ]
   });
-  const plan = await api('GET', '/api/r/feed_plan');
+  const plan = (await api('GET', '/api/r/feed_plan')).filter(inSel);
   const days = Number(s.plan_days) || 90;
   const perHead = plan.reduce((a, r) => a + r.cost, 0) + (Number(s.plan_other_budget) || 0);
-  const autoHeads = state.lk.activeBySpecies[s.plan_species] || 0;
-  const heads = s.plan_head_count !== '' && s.plan_head_count != null ? Number(s.plan_head_count) : autoHeads;
   const perDayHead = perHead / days;
   const kv = (k, v, strong) => h('div', { class: 'kv' + (strong ? ' strong' : '') }, h('span', {}, k), h('span', {}, v));
   summaryBox.replaceChildren(h('section', { class: 'card' },
@@ -2335,7 +2363,7 @@ PAGES.feedcalc = async main => {
       kv('Маллагаа, ус, мал эмнэлэг бусад төсөв', FMT.money(Number(s.plan_other_budget) || 0)),
       kv(`1 толгойн ${days} хоногийн нийт`, FMT.money(perHead), true),
       kv('1 толгойн өдрийн зардал', FMT.money(perDayHead)),
-      kv(`${s.plan_species}ний тоо`, String(heads)),
+      kv('Малын тоо', String(heads)),
       kv('Бүх малын өдрийн зардал', FMT.money(perDayHead * heads)),
       kv(`Бүх малын ${days} хоногийн зардал`, FMT.money(perDayHead * heads * days), true))));
 
@@ -2805,15 +2833,11 @@ function openFeedPlanSettings(onDone) {
   const s = state.lk.settings;
   const days = numberInput({ required: true }, s.plan_days);
   const other = numberInput({}, s.plan_other_budget);
-  const species = h('select', {}, state.lk.species.map(sp => h('option', { value: sp, selected: s.plan_species === sp }, sp)));
-  const heads = numberInput({}, s.plan_head_count);
   const msg = h('div', { class: 'form-msg' });
   const form = h('form', { class: 'modal-body' },
     h('div', { class: 'form-grid' },
       field('Төлөвлөгөөний хоног *', days),
-      field('Маллагаа, ус, мал эмнэлэг бусад төсөв (1 толгой) ₮', other),
-      field('Малын төрөл', species),
-      field('Малын тоо', heads)),
+      field('Маллагаа, ус, мал эмнэлэг бусад төсөв (1 толгой) ₮', other)),
     msg,
     h('div', { class: 'modal-actions' }, h('span', { class: 'spacer' }),
       h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, 'Болих'),
@@ -2822,7 +2846,7 @@ function openFeedPlanSettings(onDone) {
     e.preventDefault();
     try {
       if (!confirmSave()) return;
-      await api('PUT', '/api/settings', { plan_days: days.value, plan_other_budget: other.value, plan_species: species.value, plan_head_count: heads.value });
+      await api('PUT', '/api/settings', { plan_days: days.value, plan_other_budget: other.value });
       dlg.close(); toast('Хадгаллаа'); onDone();
     } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; }
   });

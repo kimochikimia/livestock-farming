@@ -620,15 +620,30 @@ const resources = {
   },
 
   feed_plan: {
-    table: 'feed_plan', title: 'Тэжээлийн төлөвлөгөө', describe: v => v.feed_name,
+    table: 'feed_plan', title: 'Тэжээлийн төлөвлөгөө', describe: v => [v.species, v.age_name, v.sex, v.feed_name].filter(Boolean).join(' · '),
     fields: {
+      species: { t: 'text', req: true, options: SPECIES, label: 'Малын төрөл' },
+      age_name: { t: 'text', max: 100, label: 'Насны нэршил' },
+      sex: { t: 'text', options: SEXES, label: 'Хүйс' },
       feed_name: { t: 'text', req: true, max: 200, label: 'Тэжээлийн төрөл' },
       kg_1_14: { t: 'num', label: '1–14 хоног (кг/өдөр)' },
       kg_15_30: { t: 'num', label: '15–30 хоног (кг/өдөр)' },
-      kg_31_90: { t: 'num', label: '31–90 хоног (кг/өдөр)' },
-      price: { t: 'num', label: 'Нэг кг үнэ' }
+      kg_31_90: { t: 'num', label: '31–90 хоног (кг/өдөр)' }
     },
-    list: async (db, farmId) => (await db.q('SELECT * FROM feed_plan WHERE farm_id = ? ORDER BY id', [farmId])).map(r => {
+    // Тэжээлийг Тохиргоо → Тэжээл-ээс сонгоно (үнэ нь тэндээс). Нэг төлөвлөгөөнд нэг тэжээл нэг удаа
+    async prepare(v, db, farmId, id) {
+      const old = id ? await db.one('SELECT feed_name, price FROM feed_plan WHERE id = ? AND farm_id = ?', [id, farmId]) : null;
+      const f = await db.one('SELECT name FROM feeds WHERE farm_id = ? AND name = ?', [farmId, v.feed_name]);
+      if (f) { v.feed_name = f.name; v.price = null; }
+      else if (old && old.feed_name === v.feed_name) v.price = old.price; // хуучин (тохиргоонд байхгүй) тэжээл
+      else throw new HttpError(400, `"${v.feed_name}" тэжээл Тохиргоо → Тэжээл-д бүртгэлгүй байна`);
+      if (await db.one(`SELECT 1 x FROM feed_plan WHERE farm_id = ? AND species = ? AND COALESCE(age_name, '') = ? AND COALESCE(sex, '') = ?
+        AND feed_name = ? AND id <> ?`, [farmId, v.species, v.age_name || '', v.sex || '', v.feed_name, id || 0])) {
+        throw new HttpError(409, `${v.feed_name} энэ төлөвлөгөөнд аль хэдийн байна`);
+      }
+    },
+    list: async (db, farmId) => (await db.q(`SELECT p.*, COALESCE(f.price, p.price) AS price FROM feed_plan p
+      LEFT JOIN feeds f ON f.farm_id = p.farm_id AND f.name = p.feed_name WHERE p.farm_id = ? ORDER BY p.id`, [farmId])).map(r => {
       const total_kg = n0(r.kg_1_14) * 14 + n0(r.kg_15_30) * 16 + n0(r.kg_31_90) * 60;
       return { ...r, total_kg, cost: total_kg * n0(r.price) };
     })
@@ -841,4 +856,4 @@ function mapDbError(err) {
   return null;
 }
 
-module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE, animalPurchaseExpenses, meatStock };
+module.exports = { resources, validate, HttpError, mapDbError, SPECIES, SEXES, TASK_STATUSES, FEED_TYPE, animalPurchaseExpenses, meatStock, withCurrentAgeName };

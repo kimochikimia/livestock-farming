@@ -242,6 +242,13 @@ async function init() {
   }
   // Хөрөнгө оруулагчийн нэрийг бүртгэлтэй хэрэглэгчийн одоогийн нэрээр шинэчилнэ
   await pool.query('UPDATE partners p JOIN users u ON u.id = p.user_id SET p.name = u.name WHERE p.name <> u.name');
+  // Тэжээлийн төлөвлөгөө малын төрөл / насны нэршил / хүйсээр (хоосон = бүгд).
+  // Хуучин мөрүүд фермийн "plan_species" (үгүй бол Үхэр) төрлийн ерөнхий төлөвлөгөө болно
+  if (await ensureColumn('feed_plan', 'species', 'VARCHAR(20) NULL')) {
+    await pool.query(`UPDATE feed_plan p SET species = COALESCE((SELECT s.value FROM farm_settings s WHERE s.farm_id = p.farm_id AND s.skey = 'plan_species'), 'Үхэр')`);
+  }
+  await ensureColumn('feed_plan', 'age_name', 'VARCHAR(100) NULL');
+  await ensureColumn('feed_plan', 'sex', 'VARCHAR(20) NULL');
   // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг
@@ -311,7 +318,7 @@ const COPYABLE = {
   tag_colors: ['name'],
   task_types: ['name', 'needs_animals'],
   breeding: ['species', 'dam_name', 'births_per_year', 'gestation', 'breeding_months', 'birthing_months'],
-  feed_plan: ['feed_name', 'kg_1_14', 'kg_15_30', 'kg_31_90', 'price'],
+  feed_plan: ['species', 'age_name', 'sex', 'feed_name', 'kg_1_14', 'kg_15_30', 'kg_31_90', 'price'],
 };
 async function copyFarmSettings(c, fromId, toId) {
   for (const [t, cols] of Object.entries(COPYABLE)) {
