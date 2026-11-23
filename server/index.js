@@ -124,7 +124,7 @@ async function loadFarm(req) {
   return farm;
 }
 // Фермийн доторх хүсэлтүүд — сонгосон фермээр шүүгдэнэ
-app.use(['/api/r', '/api/photos', '/api/animals', '/api/slaughters', '/api/meat-stock', '/api/lookups', '/api/dashboard', '/api/settings'], async (req, res, next) => { await loadFarm(req); next(); });
+app.use(['/api/r', '/api/photos', '/api/animals', '/api/slaughters', '/api/meat-stock', '/api/lookups', '/api/dashboard', '/api/investors', '/api/settings'], async (req, res, next) => { await loadFarm(req); next(); });
 const farmFull = req => req.farmRole === 'owner' || req.farmRole === 'admin';
 function permLevel(req, mod) {
   if (!req.farm) return 0;
@@ -744,6 +744,41 @@ app.get('/api/dashboard', async (req, res) => {
     herd, monthly, attention: { needWeigh, behind, slaughterSoon, noCarcass, tasksOverdue, doseOverdue, doseSoon, feedEmpty: feed.empty },
     feed, treat: { recent: recentTreatments, month: treatMonth, total: treatRows.length }, loss: { year: lossYear }
   });
+});
+
+// ---------- Хөрөнгө оруулагчийн мэдээлэл: хүн бүрийн төлсөн мал, тэжээл, бусад зардал ----------
+app.get('/api/investors', async (req, res) => {
+  requirePerm(req, 'dashboard', 1);
+  const fid = req.farm.id;
+  const partners = await db.q('SELECT id, name, percent, invested, is_owner, payout_period, start_date, end_date FROM partners WHERE farm_id = ? ORDER BY is_owner DESC, id', [fid]);
+  // paid_by тодорхойгүй зардлыг "Тодорхойгүй" (id: 0) мөрөнд
+  const blank = () => ({ animals: { n: 0, total: 0, bySpecies: {} }, feed: { total: 0, items: {} }, other: { total: 0, byType: {} } });
+  const by = new Map(partners.map(p => [p.id, blank()]));
+  const slot = pid => (by.has(pid) ? by.get(pid) : (by.has(0) || by.set(0, blank()), by.get(0)));
+  const species = new Map((await db.q('SELECT id, species FROM animals WHERE farm_id = ?', [fid])).map(a => [a.id, a.species]));
+  for (const e of await animalPurchaseExpenses(db, fid)) {
+    const x = slot(e.paid_by).animals;
+    x.n++; x.total += e.total;
+    const sp = species.get(e.animal_id) || '—';
+    x.bySpecies[sp] = (x.bySpecies[sp] || 0) + 1;
+  }
+  for (const e of await db.q('SELECT type, feed_name, unit, paid_by, COALESCE(qty, 0) qty, COALESCE(qty, 0) * COALESCE(unit_price, 0) total FROM expenses WHERE farm_id = ?', [fid])) {
+    const x = slot(e.paid_by);
+    if (e.type === FEED_TYPE && e.feed_name) {
+      x.feed.total += Number(e.total) || 0;
+      const k = e.feed_name + '|' + (e.unit || 'кг');
+      x.feed.items[k] = (x.feed.items[k] || 0) + (Number(e.qty) || 0);
+    } else {
+      x.other.total += Number(e.total) || 0;
+      x.other.byType[e.type] = (x.other.byType[e.type] || 0) + (Number(e.total) || 0);
+    }
+  }
+  const shape = (p, x) => ({ ...p, animals: x.animals, other: x.other,
+    feed: { total: x.feed.total, items: Object.entries(x.feed.items).map(([k, qty]) => { const [name, unit] = k.split('|'); return { name, unit, qty }; }) },
+    paid: x.animals.total + x.feed.total + x.other.total });
+  const rows = partners.map(p => shape(p, by.get(p.id)));
+  if (by.has(0)) rows.push(shape({ id: 0, name: 'Тодорхойгүй', percent: null, invested: null }, by.get(0)));
+  res.json(rows);
 });
 
 // ---------- Ерөнхий CRUD (сонгосон ферм дотор) ----------

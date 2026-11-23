@@ -141,7 +141,7 @@ const NAV = [
   { group: 'finance', farm: true, label: 'Санхүү', icon: '₮' },
   { path: 'expenses', farm: true, parent: 'finance', module: 'expenses', label: 'Зардлын бүртгэл', icon: '⊖' },
   { path: 'sales', farm: true, parent: 'finance', module: 'sales', label: 'Борлуулалтын бүртгэл', icon: '⊕' },
-  { path: 'profitshare', farm: true, parent: 'finance', module: 'dashboard', label: 'Ашиг хуваарилалт', icon: '%' },
+  { path: 'profitshare', farm: true, parent: 'finance', module: 'dashboard', label: 'Хөрөнгө оруулагч', icon: '%' },
   { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
   // Зах зээлийн судалгаа → Тохиргоо → "Зах зээл" таб
   { path: 'settings', farm: true, full: true, label: 'Тохиргоо', icon: '⚙' },
@@ -1232,10 +1232,38 @@ PAGES.dashboard = async main => {
 
 // Санхүү → Ашиг хуваарилалт: хөрөнгө оруулагчдын ашиг
 PAGES.profitshare = async main => {
-  const d = await api('GET', '/api/dashboard');
-  fill(main, d.partners.length ? partnerProfitCard(d, () => PAGES.profitshare(main))
-    : h('section', { class: 'card' }, h('p', { class: 'muted' }, 'Хөрөнгө оруулагч бүртгэгдээгүй байна.')));
+  const [d, inv] = await Promise.all([api('GET', '/api/dashboard'), api('GET', '/api/investors')]);
+  if (!d.partners.length) return fill(main, h('section', { class: 'card' }, h('p', { class: 'muted' }, 'Хөрөнгө оруулагч бүртгэгдээгүй байна.')));
+  fill(main, investorInfoCard(inv), partnerProfitCard(d, () => PAGES.profitshare(main)));
 };
+
+// Хөрөнгө оруулагчийн мэдээлэл: хүн бүрийн авсан мал, тэжээл, бусад зардал (зардлын "Төлсөн"-өөр)
+function investorInfoCard(rows) {
+  const list = obj => Object.entries(obj).map(([k, v]) => `${k} ${v}`).join(' · ');
+  const small = t => (t ? h('div', { class: 'muted small' }, t) : null);
+  const sum = k => rows.reduce((s, r) => s + ((typeof k === 'function' ? k(r) : r[k]) || 0), 0);
+  return h('section', { class: 'card' },
+    h('div', { class: 'toolbar' }, h('h2', {}, 'Хөрөнгө оруулагчийн мэдээлэл'),
+      farmFull() ? h('a', { class: 'btn ghost small', href: '#/settings?tab=general' }, 'Удирдах') : null),
+    h('div', { class: 'table-wrap' }, sortableTable({ class: 'data compact' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'Нэр'), h('th', { class: 'num' }, 'Хувь'), h('th', { class: 'num' }, 'Оруулсан хөрөнгө'),
+        h('th', {}, 'Авсан мал'), h('th', { class: 'num' }, 'Малын үнэ'), h('th', {}, 'Авсан тэжээл'), h('th', { class: 'num' }, 'Тэжээлийн үнэ'),
+        h('th', { class: 'num' }, 'Бусад зардал'), h('th', { class: 'num' }, 'Нийт төлсөн'))),
+      h('tbody', {}, rows.map(r => h('tr', {},
+        h('td', {}, r.name, r.is_owner ? h('span', {}, ' ', badge('approved', 'Эзэмшигч')) : null, r.id && investorState(r) !== 'Хүчинтэй' ? h('span', {}, ' ', badge(investorState(r))) : null),
+        h('td', { class: 'num' }, r.percent != null ? FMT.pct(r.percent) : ''),
+        h('td', { class: 'num' }, r.invested != null ? FMT.money(r.invested) : ''),
+        h('td', {}, r.animals.n ? `${r.animals.n} толгой` : '—', small(list(r.animals.bySpecies))),
+        h('td', { class: 'num' }, FMT.money(r.animals.total)),
+        h('td', {}, r.feed.items.length ? r.feed.items.map(f => h('div', {}, `${f.name} ${qtyUnit(f.qty, f.unit)}`)) : '—'),
+        h('td', { class: 'num' }, FMT.money(r.feed.total)),
+        h('td', { class: 'num' }, FMT.money(r.other.total), small(Object.entries(r.other.byType).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${FMT.money(v)}`).join(' · '))),
+        h('td', { class: 'num' }, h('b', {}, FMT.money(r.paid)))))),
+      h('tfoot', {}, h('tr', {}, h('td', {}, 'Нийт'), h('td'), h('td', { class: 'num' }, FMT.money(sum('invested'))),
+        h('td', {}, `${sum(r => r.animals.n)} толгой`), h('td', { class: 'num' }, FMT.money(sum(r => r.animals.total))), h('td'),
+        h('td', { class: 'num' }, FMT.money(sum(r => r.feed.total))), h('td', { class: 'num' }, FMT.money(sum(r => r.other.total))),
+        h('td', { class: 'num' }, FMT.money(sum('paid'))))))));
+}
 
 // Хөрөнгө оруулагчдын ашиг: хуваарилалтын арга (хувиар / зардлыг буцааж) ба татвар тооцох эсэх
 function partnerProfitCard(d, rerender) {
