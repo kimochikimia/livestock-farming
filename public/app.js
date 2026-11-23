@@ -119,7 +119,7 @@ function numberInput(attrs = {}, initial) {
 const BADGE = {
   'Борлуулах': 'green', 'Хүрээгүй': 'amber', 'Тохиргоо олдсонгүй': 'gray',
   'Төлөвлөсөн': 'blue', 'Хийгдсэн': 'green', 'Цуцалсан': 'gray', 'Хүлээгдэж буй': 'amber', 'Бүртгэсэн': 'green', 'Хүчинтэй': 'green', 'Эхлээгүй': 'blue', 'Дууссан': 'gray', 'Зарах малд': 'blue', 'Гараар нэмсэн': 'gray',
-  'Идэвхтэй': 'blue', 'Бой товлогдсон': 'amber', 'Бойлсон': 'gray', 'Зарагдсан': 'green',
+  'Идэвхтэй': 'blue', 'Бой товлогдсон': 'amber', 'Бойлсон': 'gray', 'Зарагдсан': 'green', 'Хорогдсон': 'red',
   pending: 'amber', approved: 'green', rejected: 'red', blocked: 'red'
 };
 const badge = (v, label) => (v ? h('span', { class: 'badge ' + (BADGE[v] || 'gray') }, label ?? v) : '');
@@ -1109,9 +1109,12 @@ PAGES.dashboard = async main => {
     h('span', { class: 'att-count' }, n)) : null;
   const attItems = [
     canMod('tasks') ? item('critical', '!', 'Хоцорсон ажил', A.tasksOverdue, '#/tasks') : null,
+    canMod('treatments') ? item('critical', '✚', 'Хоцорсон эмчилгээ / вакцин', A.doseOverdue.length, '#/treatments', A.doseOverdue.map(r => `${r.tag_id} ${r.name}`)) : null,
+    canMod('feed') ? item('warning', '❦', 'Дууссан тэжээл', A.feedEmpty.length, '#/feedusage', A.feedEmpty) : null,
     canMod('slaughter') ? item('warning', '⚑', 'Гулуузны жин бүртгээгүй', A.noCarcass.length, '#/slaughter', A.noCarcass.map(a => a.tag_id)) : null,
     canMod('weighings') ? item('warning', '⚖', '30+ хоног жинлээгүй мал', A.needWeigh.length, '#/weighings', A.needWeigh.map(a => a.tag_id)) : null,
     canMod('weighings') ? item('serious', '↘', 'Зорилтоос хоцорч буй өсөлт', A.behind.length, '#/weighings', A.behind.map(a => a.tag_id)) : null,
+    canMod('treatments') ? item('info', '✚', '14 хоногт хийх эмчилгээ / вакцин', A.doseSoon.length, '#/treatments', A.doseSoon.map(r => `${r.tag_id} ${r.name} (${r.date.slice(5)})`)) : null,
     canMod('slaughter') ? item('info', '▤', '14 хоногт бойлох мал', A.slaughterSoon.length, '#/slaughter', A.slaughterSoon.map(a => `${a.tag_id} (${a.date.slice(5)})`)) : null,
     canMod('slaughter') ? item('good', '✓', 'Борлуулахад бэлэн мал', d.stats.ready, '#/slaughter', d.ready.map(a => a.tag_id)) : null
   ].filter(Boolean);
@@ -1177,14 +1180,25 @@ PAGES.dashboard = async main => {
         kpi('Идэвхтэй мал', nf0.format(d.stats.active), '', speciesRows.map(r => `${r.label} ${r.value}`).join(' · ') || null),
         kpi('Нийт амьд жин', FMT.kg(d.herd.liveWeight)),
         kpi('Дундаж өдрийн өсөлт', d.herd.avgAdg != null ? FMT.kg(d.herd.avgAdg) : '—'),
-        kpi('Бойлсон · Зарагдсан', `${d.stats.slaughtered} · ${d.stats.sold}`))),
+        kpi('Бойлсон · Зарагдсан', `${d.stats.slaughtered} · ${d.stats.sold}`),
+        kpi('Хорогдол', `${d.stats.lost} толгой`, d.stats.lost ? 'neg' : '', `${tday.slice(0, 4)} онд ${d.loss.year}`))),
     // 2. Санхүү
     group('Санхүү',
       h('div', { class: 'kpis' },
         kpi('Борлуулалтын орлого', FMT.money(d.salesTotal), 'pos', d.salesKg ? `${FMT.kg(d.salesKg)} борлуулсан` : null),
         kpi('Нийт зарлага', FMT.money(d.expenseTotal), 'neg'),
         kpi('Ашиг', FMT.money(d.profit), d.profit >= 0 ? 'pos' : 'neg', margin != null ? `Ашгийн хувь ${nf0.format(margin)}%` : null),
+        d.distribution.taxOn ? kpi('Татварын дараах ашиг', FMT.money(d.distribution.netProfit), d.distribution.netProfit >= 0 ? 'pos' : 'neg',
+          `Татвар (${d.distribution.taxRate}%) ${FMT.money(d.distribution.tax)}`) : null,
         kpi('Малын хөрөнгө', FMT.money(d.herd.assetValue)))),
+    // 3. Тэжээл ба эрүүл мэнд
+    canMod('feed') || canMod('treatments') ? group('Тэжээл ба эрүүл мэнд',
+      h('div', { class: 'kpis' },
+        canMod('feed') ? kpi('Тэжээлийн үлдэгдэл', FMT.money(d.feed.stockValue), '', `${d.feed.kinds} төрөл${d.feed.empty.length ? ` · дууссан ${d.feed.empty.length}` : ''}`) : null,
+        canMod('feed') ? kpi('Энэ сарын тэжээлийн зарцуулалт', FMT.money(d.feed.monthCost)) : null,
+        canMod('treatments') ? kpi('Эмчилгээ, вакцин', `${d.treat.total}`, '', `Энэ сард ${d.treat.month}`) : null,
+        canMod('treatments') ? kpi('Дараагийн тун', `${d.attention.doseSoon.length + d.attention.doseOverdue.length}`, d.attention.doseOverdue.length ? 'neg' : '',
+          d.attention.doseOverdue.length ? `Хоцорсон ${d.attention.doseOverdue.length}` : '14 хоногт') : null)) : null,
     h('h2', { class: 'dash-group-title' }, 'Анхаарах ба тайлан'),
     h('div', { class: 'grid2 dash-main' },
       attItems.length ? h('section', { class: 'card' }, h('h2', {}, 'Анхаарах'), h('div', { class: 'att-list' }, attItems)) : null,
@@ -1202,7 +1216,18 @@ PAGES.dashboard = async main => {
       d.recentWeighings.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Сүүлийн жинлэлтүүд'), canMod('weighings') ? h('a', { class: 'btn ghost small', href: '#/weighings' }, 'Бүгд') : null),
         sortableTable({ class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', { class: 'num' }, 'Жин'))),
-          h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null));
+          h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null),
+    h('div', { class: 'grid2' },
+      canMod('treatments') && d.treat.recent.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Сүүлийн эмчилгээ, вакцин'), h('a', { class: 'btn ghost small', href: '#/treatments' }, 'Бүгд')),
+        sortableTable({ class: 'data compact' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', {}, 'Төрөл'), h('th', {}, 'Өвчин / вакцин'))),
+          h('tbody', {}, d.treat.recent.map(r => h('tr', {}, h('td', {}, r.date), h('td', {}, r.tag_id), h('td', {}, r.kind), h('td', {}, r.name)))))) : null,
+      canMod('feed') && d.feed.stock.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Тэжээлийн үлдэгдэл'), h('a', { class: 'btn ghost small', href: '#/feedusage' }, 'Дэлгэрэнгүй')),
+        sortableTable({ class: 'data compact' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Тэжээл'), h('th', { class: 'num' }, 'Үлдэгдэл'), h('th', { class: 'num' }, 'Өртөг'))),
+          h('tbody', {}, d.feed.stock.map(r => h('tr', {}, h('td', {}, r.feed_name),
+            h('td', { class: 'num' }, h('span', { class: r.left_qty <= 0 ? 'warn' : '' }, qtyUnit(r.left_qty, r.unit), r.left_bale != null ? ` (≈ ${FMT.num(r.left_bale)} боодол)` : '')),
+            h('td', { class: 'num' }, FMT.money(r.left_value))))))) : null));
 };
 
 // Санхүү → Ашиг хуваарилалт: хөрөнгө оруулагчдын ашиг
@@ -1276,7 +1301,7 @@ PAGES.animals = main => {
   filters: [
     { k: 'source', label: 'Орлогын төрөл', options: () => ANIMAL_SOURCES },
     { k: 'species', label: 'Төрөл', options: () => state.lk.species },
-    { k: 'state', label: 'Төлөв', options: ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан'] }
+    { k: 'state', label: 'Төлөв', options: ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан', 'Хорогдсон'] }
   ],
   fields: [
     { k: '_income', type: 'section', label: 'Орлого' },
@@ -1334,6 +1359,7 @@ PAGES.animals = main => {
     { k: 'goal_date', label: 'Зорилтот огноо' },
     { k: 'goal_adg', label: 'Өдөрт шаардлагатай өсөлт', f: 'kg' },
     col('target_status'), col('state'),
+    { k: 'loss_date', label: 'Хорогдсон огноо' }, { k: 'loss_reason', label: 'Хорогдлын шалтгаан' },
     { k: 'note', label: 'Тэмдэглэл' }
   ];
   let view = 'summary';
@@ -1348,8 +1374,9 @@ PAGES.animals = main => {
     sub: [`№ ${r.tag_id}`, r.sex, r.last_weight != null ? FMT.kg(r.last_weight) : r.initial_weight != null ? FMT.kg(r.initial_weight) : null].filter(Boolean).join(' · '),
     actions: r.state === 'Идэвхтэй' || r.state === 'Бой товлогдсон' ? [
       canMod('weighings', 2) ? quickBtn('⚖ Жин', () => openForm(QUICK_WEIGH_CFG, null, () => cfg.onChange(), false, { tag_id: r.tag_id })) : null,
-      canMod('treatments', 2) ? quickBtn('✚ Эмчилгээ', () => openForm(TREATMENT_CFG, null, () => {}, false, { tag_id: r.tag_id })) : null
-    ].filter(Boolean) : []
+      canMod('treatments', 2) ? quickBtn('✚ Эмчилгээ', () => openForm(TREATMENT_CFG, null, () => {}, false, { tag_id: r.tag_id })) : null,
+      canMod('animals', 2) ? quickBtn('✖ Хорогдол', () => openLoss(r, async () => { await loadLookups(); cfg.onChange(); })) : null
+    ].filter(Boolean) : r.state === 'Хорогдсон' && canMod('animals', 2) ? [quickBtn('✖ Хорогдол', () => openLoss(r, async () => { await loadLookups(); cfg.onChange(); }))] : []
   });
   const apply = () => {
     cfg.columns = [photoColumn('animals'), ...(view === 'detail' ? detail : summary)]; cfg._photoCol = true;
@@ -1385,6 +1412,39 @@ PAGES.animals = main => {
   drawBoard().catch(() => {});
   return crudSection(listBox, cfg);
 };
+
+// Хорогдол: огноо, шалтгаан, тэмдэглэл. Бүртгэсэн бол мэдээллийг харуулж, цуцлах боломжтой
+const LOSS_REASONS = ['Өвчин', 'Осол', 'Араатан', 'Хулгай', 'Цас, зуд', 'Бусад'];
+function openLoss(a, onDone) {
+  const done = !!a.loss_date;
+  const date = h('input', { type: 'date', required: true, value: a.loss_date || today(), min: a.purchase_date, max: today(), disabled: done });
+  const reason = h('input', { class: 'combo-input', required: true, maxlength: 200, autocomplete: 'off', value: a.loss_reason || '', disabled: done });
+  combo(reason, () => LOSS_REASONS);
+  const note = h('input', { maxlength: 500, value: a.loss_note || '', disabled: done });
+  const msg = h('div', { class: 'form-msg' });
+  const run = async fn => { try { await fn(); dlg.close(); onDone(); } catch (ex) { msg.className = 'form-msg err'; msg.textContent = ex.message; } };
+  const form = h('form', { class: 'modal-body' },
+    h('div', { class: 'form-grid' },
+      h('div', { class: 'field third' }, h('span', { class: 'field-label' }, 'Малын ID'), h('input', { value: a.tag_id, disabled: true })),
+      h('label', { class: 'field third' }, h('span', { class: 'field-label' }, 'Хорогдсон огноо *'), date),
+      h('label', { class: 'field third' }, h('span', { class: 'field-label' }, 'Шалтгаан *'), h('div', { class: 'with-list' }, reason)),
+      h('label', { class: 'field full' }, h('span', { class: 'field-label' }, 'Тэмдэглэл'), note)),
+    msg,
+    h('div', { class: 'modal-actions' },
+      done ? h('button', { class: 'btn danger', type: 'button', onclick: () => {
+        if (!confirm(`${a.tag_id}-ийн хорогдлыг цуцалж, идэвхтэй мал болгох уу?`)) return;
+        run(async () => { await api('DELETE', `/api/animals/${a.id}/loss`); toast('Хорогдол цуцлагдлаа'); });
+      } }, 'Хорогдол цуцлах') : null,
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => dlg.close() }, done ? 'Хаах' : 'Болих'),
+      done ? null : h('button', { class: 'btn primary', type: 'submit' }, 'Хадгалах')));
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    if (!confirm(`${a.tag_id}-ийг хорогдсонд бүртгэх үү?`)) return;
+    run(async () => { await api('POST', `/api/animals/${a.id}/loss`, { date: date.value, reason: reason.value, note: note.value }); toast('Хорогдол бүртгэгдлээ'); });
+  });
+  const dlg = modal(`Хорогдол — ${a.tag_id}`, form);
+}
 
 // Картан жагсаалтын жижиг товч (мөрийн дарах үйлдлийг өдөөхгүй)
 const quickBtn = (label, onclick) => h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); onclick(); } }, label);
@@ -1564,7 +1624,7 @@ const WEIGHING_CFG = {
     { k: 'note', label: 'Тэмдэглэл', full: true }
   ]
 };
-const ANIMAL_STATES = ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан'];
+const ANIMAL_STATES = ['Идэвхтэй', 'Бой товлогдсон', 'Бойлсон', 'Зарагдсан', 'Хорогдсон'];
 // Малын бүртгэл: зорилтын төлөв + гараар "Зарах малд" шилжүүлсэн бол тэмдэг
 const targetCell = r => h('span', { class: 'to-sell-cell' }, badge(r.target_status),
   r.to_sell && r.target_status !== 'Борлуулах' && r.state !== 'Зарагдсан' ? badge('Зарах малд') : null);

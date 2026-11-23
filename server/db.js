@@ -262,6 +262,10 @@ async function init() {
     SELECT f.id, x.name FROM farms f JOIN (SELECT 'Эмчилгээ' AS name UNION SELECT 'Вакцин') x
     WHERE NOT EXISTS (SELECT 1 FROM treatment_types t WHERE t.farm_id = f.id)`);
   await pool.query('INSERT IGNORE INTO treatment_types(farm_id, name) SELECT DISTINCT farm_id, kind FROM treatments');
+  // Хорогдол: малын хорогдсон огноо, шалтгаан (бүртгэсэн бол идэвхтэй малд тооцогдохгүй)
+  await ensureColumn('animals', 'loss_date', 'DATE NULL');
+  await ensureColumn('animals', 'loss_reason', 'VARCHAR(200) NULL');
+  await ensureColumn('animals', 'loss_note', 'VARCHAR(500) NULL');
   // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг

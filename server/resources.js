@@ -121,7 +121,7 @@ async function withCurrentAgeName(db, farmId, rows) {
 
 // Гараар бичсэн "Малын ID"-г тухайн фермийн малын бүртгэлтэй холбоно
 async function resolveTag(v, db, farmId) {
-  const a = await db.one('SELECT id, tag_id, purchase_date FROM animals WHERE farm_id = ? AND tag_id = ?', [farmId, v.tag_id]);
+  const a = await db.one('SELECT id, tag_id, purchase_date, loss_date FROM animals WHERE farm_id = ? AND tag_id = ?', [farmId, v.tag_id]);
   if (!a) throw new HttpError(400, `"${v.tag_id}" ID-тай мал бүртгэлд алга`);
   delete v.tag_id;
   v.animal_id = a.id;
@@ -131,6 +131,7 @@ async function resolveTag(v, db, farmId) {
 // Огнооны дараалал шалгана: авсан өдөр ≤ жинлэлт ≤ бойлох өдөр ≤ ачигдсан огноо
 async function checkWeighing(v, db, farmId, id) {
   const a = await resolveTag(v, db, farmId);
+  if (a.loss_date && v.date > a.loss_date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) хорогдсон өдрөөс (${a.loss_date}) хойш байж болохгүй`);
   if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: жинлэлтийн огноо (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
   // Шинэ жинлэлт сүүлийн жинлэлтээс өмнө байж болохгүй (хуучин жинлэлтийг засахад хамаарахгүй)
   if (!id) {
@@ -318,7 +319,7 @@ const resources = {
             : a.last_weight >= target_weight ? 'Борлуулах' : 'Хүрээгүй';
         }
         // Бойлох өдөр ирээгүй бол "Бой товлогдсон" (хуваарьт орсон), өнгөрсөн бол "Бойлсон"
-        const state = a.sold_date ? 'Зарагдсан' : !a.slaughter_date ? 'Идэвхтэй' : a.slaughter_date > todayStr() ? 'Бой товлогдсон' : 'Бойлсон';
+        const state = a.loss_date ? 'Хорогдсон' : a.sold_date ? 'Зарагдсан' : !a.slaughter_date ? 'Идэвхтэй' : a.slaughter_date > todayStr() ? 'Бой товлогдсон' : 'Бойлсон';
         return {
           ...a, target_weight, goal_date, goal_adg, total_price, days, gain, adg, target_status, state, total_cost: total_price + n0(a.feed_cost),
           current_age: ag.age, current_age_name: ag.name, next_age_date: ag.next
@@ -364,6 +365,7 @@ const resources = {
       if (tt) v.kind = tt.name;
       else if (!old || old.kind !== v.kind) throw new HttpError(400, `"${v.kind}" төрөл Тохиргоо → Эмчилгээний төрөл-д бүртгэлгүй байна`);
       const a = await resolveTag(v, db, farmId);
+      if (a.loss_date && v.date > a.loss_date) throw new HttpError(400, `${a.tag_id}: огноо (${v.date}) хорогдсон өдрөөс (${a.loss_date}) хойш байж болохгүй`);
       if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: огноо (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
       if (v.next_date && v.next_date < v.date) throw new HttpError(400, 'Дараагийн тунгийн огноо эмчилгээний огнооноос өмнө байж болохгүй');
     },

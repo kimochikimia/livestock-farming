@@ -228,7 +228,7 @@ app.post('/api/auth/password', need('viewer'), async (req, res) => {
 app.get('/api/public/stats', async (req, res) => {
   const one = async sql => (await db.one(sql)).n;
   const bySpecies = await db.q(`SELECT a.species, COUNT(*) n FROM animals a
-    WHERE NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')
+    WHERE NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') AND a.loss_date IS NULL
     GROUP BY a.species ORDER BY n DESC`);
   res.set('Cache-Control', 'public, max-age=60');
   res.json({
@@ -284,7 +284,7 @@ app.get('/api/farms', need('viewer'), async (req, res) => {
   const rows = await db.q(`
     SELECT f.*, u.name AS owner_name, u.phone AS owner_phone,
       (SELECT COUNT(*) FROM animals a WHERE a.farm_id = f.id
-        AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')) AS active_animals,
+        AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') AND a.loss_date IS NULL) AS active_animals,
       (SELECT COUNT(*) FROM tasks t WHERE t.farm_id = f.id AND t.status = 'Төлөвлөсөн' AND t.date <= CURDATE()) AS tasks_due
     , (SELECT m.perms FROM farm_members m WHERE m.farm_id = f.id AND m.user_id = ?) AS member_perms
     , EXISTS (SELECT 1 FROM farm_members m WHERE m.farm_id = f.id AND m.user_id = ?) AS is_member
@@ -571,10 +571,10 @@ app.get('/api/lookups', async (req, res) => {
   const fid = req.farm.id;
   const activeBySpecies = Object.fromEntries(SPECIES.map(s => [s, 0]));
   for (const r of await db.q(`SELECT a.species, COUNT(*) n FROM animals a WHERE a.farm_id = ?
-    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') GROUP BY a.species`, [fid])) activeBySpecies[r.species] = r.n;
+    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') AND a.loss_date IS NULL GROUP BY a.species`, [fid])) activeBySpecies[r.species] = r.n;
   // Идэвхтэй мал: төрөл × одоогийн насны нэршил × хүйсээр (тэжээлийн төлөвлөгөөний толгойн тоо)
   const activeRows = await db.q(`SELECT a.id AS animal_id, a.species, a.sex FROM animals a WHERE a.farm_id = ?
-    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')`, [fid]);
+    AND NOT EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) AND NOT EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') AND a.loss_date IS NULL`, [fid]);
   const byClass = new Map();
   for (const a of await withCurrentAgeName(db, fid, activeRows)) {
     const k = [a.species, a.age_name || '', a.sex || ''].join('|');
@@ -607,7 +607,7 @@ app.get('/api/lookups', async (req, res) => {
       feedName: await col('SELECT name AS v FROM feeds WHERE farm_id = ? UNION SELECT DISTINCT feed_name FROM feed_plan WHERE farm_id = ? ORDER BY 1', [fid, fid])
     },
     animals: await db.q(`SELECT a.id, a.tag_id, a.tag_color, a.species, a.age_name, a.sex,
-      (EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) OR EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд')) AS slaughtered
+      (EXISTS (SELECT 1 FROM slaughters s WHERE s.animal_id = a.id AND s.date <= CURDATE()) OR EXISTS (SELECT 1 FROM sales ls WHERE ls.animal_id = a.id AND ls.kind = 'Амьд') OR a.loss_date IS NOT NULL) AS slaughtered
       FROM animals a WHERE a.farm_id = ? ORDER BY a.tag_id`, [fid]),
     tasksDue: (await db.one("SELECT COUNT(*) n FROM tasks WHERE farm_id = ? AND status = 'Төлөвлөсөн' AND date <= CURDATE()", [fid])).n,
     shipDates: await col('SELECT DISTINCT shipped_date AS v FROM slaughters WHERE farm_id = ? AND shipped_date IS NOT NULL ORDER BY v DESC', [fid]),
@@ -657,7 +657,7 @@ app.get('/api/dashboard', async (req, res) => {
     return { ...p, paid: pd, share, refund: refund ? pd : 0, amount: share + (refund ? pd : 0) };
   });
   const animals = await resources.animals.list(db, fid);
-  const stats = { total: animals.length, active: 0, slaughtered: 0, sold: 0, ready: 0, costTotal: 0 };
+  const stats = { total: animals.length, active: 0, slaughtered: 0, sold: 0, lost: 0, ready: 0, costTotal: 0 };
   const bySpecies = {};
   for (const a of animals) {
     stats.costTotal += a.total_cost;
@@ -666,6 +666,7 @@ app.get('/api/dashboard', async (req, res) => {
       bySpecies[a.species] = (bySpecies[a.species] || 0) + 1;
       if (a.target_status === 'Борлуулах') stats.ready++;
     } else if (a.state === 'Бойлсон') stats.slaughtered++;
+    else if (a.state === 'Хорогдсон') stats.lost++;
     else stats.sold++;
   }
   const ready = animals.filter(a => (a.state === 'Идэвхтэй' || a.state === 'Бой товлогдсон') && a.target_status === 'Борлуулах')
@@ -699,6 +700,29 @@ app.get('/api/dashboard', async (req, res) => {
     .map(a => ({ ...pick(a), date: a.slaughter_date })).sort((x, y) => x.date.localeCompare(y.date));
   const noCarcass = animals.filter(a => a.slaughter_date && a.slaughter_date < todayIso && a.carcass_weight == null).map(pick);
   const { n: tasksOverdue } = await db.one("SELECT COUNT(*) n FROM tasks WHERE farm_id = ? AND status = 'Төлөвлөсөн' AND date < CURDATE()", [fid]);
+  // Эмчилгээ/вакцины дараагийн тун: идэвхтэй мал × нэр тус бүрийн сүүлийн бичлэгээр (хоцорсон / 14 хоногт)
+  const activeIds = new Set(active.map(a => a.id));
+  const treatRows = await resources.treatments.list(db, fid);
+  const lastDose = new Map();
+  for (const r of treatRows) { const k = r.animal_id + '|' + r.name; if (!lastDose.has(k)) lastDose.set(k, r); }
+  const doses = [...lastDose.values()].filter(r => r.next_date && activeIds.has(r.animal_id))
+    .map(r => ({ tag_id: r.tag_id, name: r.name, kind: r.kind, date: r.next_date })).sort((x, y) => x.date.localeCompare(y.date));
+  const doseOverdue = doses.filter(r => r.date < todayIso);
+  const doseSoon = doses.filter(r => r.date >= todayIso && daysSince(r.date) >= -14);
+  const recentTreatments = treatRows.slice(0, 8).map(r => ({ date: r.date, tag_id: r.tag_id, kind: r.kind, name: r.name }));
+  const treatMonth = treatRows.filter(r => String(r.date).startsWith(todayIso.slice(0, 7))).length;
+  // Тэжээл: үлдэгдлийн өртөг, дууссан тэжээл, энэ сарын зарцуулалтын өртөг
+  const feedStock = await resources.feed_stock.list(db, fid);
+  const feedUse = await resources.feed_usage.list(db, fid);
+  const feed = {
+    stockValue: feedStock.reduce((s, r) => s + (r.left_value || 0), 0),
+    kinds: new Set(feedStock.filter(r => r.left_qty > 0).map(r => r.feed_name)).size,
+    empty: [...new Set(feedStock.filter(r => r.left_qty <= 0).map(r => r.feed_name))],
+    monthCost: feedUse.filter(r => String(r.date).startsWith(todayIso.slice(0, 7))).reduce((s, r) => s + (r.cost || 0), 0),
+    stock: feedStock.map(r => ({ feed_name: r.feed_name, unit: r.unit, left_qty: r.left_qty, left_bale: r.left_bale, left_value: r.left_value }))
+  };
+  const lost = animals.filter(a => a.state === 'Хорогдсон');
+  const lossYear = lost.filter(a => String(a.loss_date).startsWith(todayIso.slice(0, 4))).length;
 
   // --- Сар бүрийн орлого, зарлага (сүүлийн 12 сар) ---
   const months = [];
@@ -717,7 +741,8 @@ app.get('/api/dashboard', async (req, res) => {
 
   res.json({
     expenseTotal, byType, salesTotal: sales.t, salesKg: sales.kg, profit, distribution, partners, stats, bySpecies, ready, recentWeighings, upcomingTasks,
-    herd, monthly, attention: { needWeigh, behind, slaughterSoon, noCarcass, tasksOverdue }
+    herd, monthly, attention: { needWeigh, behind, slaughterSoon, noCarcass, tasksOverdue, doseOverdue, doseSoon, feedEmpty: feed.empty },
+    feed, treat: { recent: recentTreatments, month: treatMonth, total: treatRows.length }, loss: { year: lossYear }
   });
 });
 
@@ -859,6 +884,40 @@ app.post('/api/animals/:id/to-sell', async (req, res) => {
   removePhotoFiles(photos);
   await farmAudit(req, on ? 'Зарах мал руу шилжүүлэв' : 'Зарах малаас буцаав', 'animals', id, a.tag_id + (s ? ' (бойн хуваарь цуцлагдсан)' : ''));
   res.json({ ok: true, scheduleCancelled: !!s });
+});
+
+// ---------- Хорогдол: малыг хорогдсонд бүртгэх / цуцлах ----------
+app.post('/api/animals/:id/loss', async (req, res) => {
+  requirePerm(req, 'animals', 2);
+  const id = idParam(req);
+  const a = await db.one('SELECT id, tag_id, purchase_date FROM animals WHERE id = ? AND farm_id = ?', [id, req.farm.id]);
+  if (!a) throw new HttpError(404, 'Мал олдсонгүй');
+  const date = String(req.body.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, 'Хорогдсон огноог оруулна уу');
+  const reason = String(req.body.reason || '').trim().slice(0, 200);
+  if (!reason) throw new HttpError(400, 'Хорогдлын шалтгааныг оруулна уу');
+  const note = String(req.body.note || '').trim().slice(0, 500) || null;
+  if (date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: хорогдсон огноо малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
+  if (await db.one('SELECT 1 x FROM slaughters WHERE animal_id = ? AND date <= ?', [id, date])) throw new HttpError(400, `${a.tag_id}: энэ мал бойлогдсон байна`);
+  if (await db.one("SELECT 1 x FROM sales WHERE animal_id = ? AND kind = 'Амьд'", [id])) throw new HttpError(400, `${a.tag_id}: энэ мал амьдаар зарагдсан байна`);
+  const later = await db.one(`SELECT MAX(d) d FROM (SELECT MAX(date) d FROM weighings WHERE animal_id = ? UNION ALL SELECT MAX(date) FROM treatments WHERE animal_id = ?) x`, [id, id]);
+  if (later?.d && later.d > date) throw new HttpError(400, `${a.tag_id}: ${later.d}-нд жинлэлт/эмчилгээ бүртгэгдсэн тул хорогдсон огноо түүнээс өмнө байж болохгүй`);
+  // Бойн хуваарьт (ирээгүй) орсон бол хуваарийг цуцална
+  await db.tx(async c => {
+    await c.run('DELETE FROM slaughters WHERE animal_id = ? AND date > ? AND carcass_weight IS NULL', [id, date]);
+    await c.run('UPDATE animals SET loss_date = ?, loss_reason = ?, loss_note = ?, to_sell = 0 WHERE id = ?', [date, reason, note, id]);
+  });
+  await farmAudit(req, 'Хорогдол бүртгэв', 'animals', id, `${a.tag_id} · ${date} · ${reason}`);
+  res.json({ ok: true });
+});
+app.delete('/api/animals/:id/loss', async (req, res) => {
+  requirePerm(req, 'animals', 2);
+  const id = idParam(req);
+  const a = await db.one('SELECT id, tag_id, loss_date FROM animals WHERE id = ? AND farm_id = ?', [id, req.farm.id]);
+  if (!a) throw new HttpError(404, 'Мал олдсонгүй');
+  await db.run('UPDATE animals SET loss_date = NULL, loss_reason = NULL, loss_note = NULL WHERE id = ?', [id]);
+  await farmAudit(req, 'Хорогдол цуцлав', 'animals', id, `${a.tag_id} · ${a.loss_date || ''}`);
+  res.json({ ok: true });
 });
 
 // ---------- Махны үлдэгдэл: бойноос гарсан нийт мах − махлаж зарсан ----------
