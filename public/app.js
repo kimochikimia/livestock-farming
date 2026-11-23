@@ -613,49 +613,64 @@ function modal(title, body, actions) {
 // Санал болгох жагсаалт (хөтчийн datalist-ийн оронд): талбарын доор (зай хүрэхгүй бол дээр) нээгдэнэ,
 // бичсэн текстээр шүүнэ, сумаар шилжиж Enter-ээр сонгоно. Сонгоход input + change үзэгдэл үүсгэнэ.
 function combo(input, getItems) {
-  let list = null, items = [], active = -1;
+  let list = null, items = [], active = -1, touching = false;
+  // Сонгох зүйлгүй бол сумыг нуух (хоосон жагсаалт нээгдэх мэт харагдахгүй)
+  const syncArrow = () => input.classList.toggle('no-list', !getItems().filter(Boolean).length);
   // Гүйлгэх, гар (keyboard) гарч дэлгэц өөрчлөгдөхөд хаахгүй — талбарыг дагаж байрлалаа шинэчилнэ
   const follow = () => { if (list) place(); };
+  const vv = window.visualViewport;
   const close = () => {
-    list?.remove(); list = null; active = -1;
+    list?.remove(); list = null; active = -1; touching = false;
     window.removeEventListener('resize', follow); window.removeEventListener('scroll', follow, true);
-    window.visualViewport?.removeEventListener('resize', follow);
+    vv?.removeEventListener('resize', follow); vv?.removeEventListener('scroll', follow);
   };
   const pick = s => { input.value = s; close(); input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('change')); };
   const place = () => {
     const r = input.getBoundingClientRect();
-    // Утсан дээр гар гарсан үед харагдах өндөр нь visualViewport
-    const vh = window.visualViewport?.height || window.innerHeight;
-    if (r.bottom < 0 || r.top > vh) { close(); return; }
-    const below = vh - r.bottom - 8, above = r.top - 8;
+    // Утсан дээр гар гарсан үед харагдах хэсэг = visualViewport (offsetTop-оос эхэлнэ)
+    const top0 = vv ? vv.offsetTop : 0, bottom0 = top0 + (vv ? vv.height : window.innerHeight);
+    if (r.bottom < top0 || r.top > bottom0) { close(); return; }
+    const below = bottom0 - r.bottom - 8, above = r.top - top0 - 8;
     const up = below < 160 && above > below;
-    Object.assign(list.style, { left: r.left + 'px', width: r.width + 'px', maxHeight: Math.max(120, Math.min(260, up ? above : below)) + 'px',
-      top: up ? '' : r.bottom + 4 + 'px', bottom: up ? window.innerHeight - r.top + 4 + 'px' : '' });
+    const maxH = Math.max(100, Math.min(260, up ? above : below));
+    Object.assign(list.style, { left: r.left + 'px', width: r.width + 'px', maxHeight: maxH + 'px', bottom: '' });
+    const hgt = Math.min(list.scrollHeight, maxH);
+    list.style.top = (up ? r.top - 4 - hgt : r.bottom + 4) + 'px';
   };
   const highlight = () => [...(list?.children || [])].forEach((li, i) => {
     li.classList.toggle('active', i === active);
     if (i === active) li.scrollIntoView({ block: 'nearest' });
   });
   function open(filter) {
+    syncArrow();
     const q = filter ? input.value.trim().toLowerCase() : '';
-    items = getItems().filter(s => !q || String(s).toLowerCase().includes(q));
+    items = getItems().filter(s => s && (!q || String(s).toLowerCase().includes(q)));
     if (!items.length) { close(); return; }
     if (!list) {
       list = h('ul', { class: 'combo-list', role: 'listbox' });
+      // Жагсаалтад хүрэхэд талбараас focus алдагдахгүй; гүйлгэж байх үед хаагдахгүй
+      list.addEventListener('mousedown', e => e.preventDefault());
+      list.addEventListener('touchstart', () => { touching = true; }, { passive: true });
+      const release = () => setTimeout(() => { touching = false; if (list && document.activeElement !== input) close(); }, 400);
+      list.addEventListener('touchend', release); list.addEventListener('touchcancel', release);
       (input.closest('dialog') || document.body).append(list);
       window.addEventListener('resize', follow); window.addEventListener('scroll', follow, true);
-      window.visualViewport?.addEventListener('resize', follow);
+      vv?.addEventListener('resize', follow); vv?.addEventListener('scroll', follow);
     }
     active = -1;
+    // click: гүйлгэх хөдөлгөөний дараа сонгогдохгүй, зөвхөн товшиход
     list.replaceChildren(...items.map(s => h('li', {
       role: 'option', class: s === input.value ? 'selected' : null,
-      onmousedown: e => { e.preventDefault(); pick(s); }
+      onclick: e => { e.preventDefault(); pick(s); }
     }, s)));
+    list.scrollTop = 0;
     place();
   }
+  syncArrow();
+  input.addEventListener('focus', syncArrow);
   input.addEventListener('click', () => (list ? close() : open(false)));
   input.addEventListener('input', e => { if (e.isTrusted) open(true); });
-  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('blur', () => setTimeout(() => { if (!touching && document.activeElement !== input) close(); }, 200));
   input.addEventListener('keydown', e => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();

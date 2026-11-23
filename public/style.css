@@ -842,3 +842,6 @@ html[data-farm-theme="color"][data-farm-light] .btn.primary { background: var(--
 .item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 600px) { .item-row { flex-wrap: wrap; } .item-actions { order: 3; width: 100%; justify-content: flex-start; padding-left: 52px; } }
 .item-row:not(.clickable) { cursor: default; }
+/* Санал болгох утгагүй талбарт сум харуулахгүй; утсан дээр жагсаалт хуруугаар гүйлгэгдэнэ */
+input.combo-input.no-list { background-image: none; padding-right: 12px; }
+.combo-list { -webkit-overflow-scrolling: touch; touch-action: pan-y; }
