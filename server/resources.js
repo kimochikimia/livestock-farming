@@ -497,6 +497,12 @@ const resources = {
     }
   },
 
+  // Тэжээлийн орлого (зөвхөн харах): "Тэжээл" төрлийн зардал бүр — засвар нь expenses-ээр
+  feed_purchases: {
+    table: 'expenses', title: 'Тэжээлийн бүртгэл', readonly: true,
+    list: async (db, farmId) => (await resources.expenses.list(db, farmId)).filter(e => e.type === FEED_TYPE)
+  },
+
   // Тэжээлийн үлдэгдэл (зөвхөн харах): орлого − зарцуулалт
   feed_stock: {
     table: 'feed_usage', title: 'Тэжээлийн үлдэгдэл', readonly: true,
@@ -891,6 +897,7 @@ const RESOURCE_MODULES = {
   feed_recipes: ['feed'],
   feed_usage: ['feed'],
   feed_stock: ['feed', ['feed', 'expenses']],
+  feed_purchases: ['feed', ['feed', 'expenses']],
   tasks: ['tasks']
 };
 for (const [k, [mod, readers]] of Object.entries(RESOURCE_MODULES)) {

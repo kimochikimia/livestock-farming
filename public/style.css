@@ -221,7 +221,7 @@ dialog.modal::backdrop { background: rgba(10, 20, 12, .45); }
 
 /* ---------- Зураг ---------- */
 .visually-hidden { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden; }
-.with-list { display: contents; }
+.with-list { display: block; position: relative; }
 .photo-panel { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
 .photo-grid:empty { display: none; }
@@ -376,7 +376,7 @@ select, input.combo-input {
 select::-ms-expand { display: none; }
 /* Санал болгох жагсаалт — талбарын доор, аппын өнгөөр */
 .combo-list {
-  position: fixed; z-index: 1000; margin: 0; padding: 4px; list-style: none; overflow-y: auto;
+  position: absolute; z-index: 1000; margin: 0; padding: 4px; list-style: none; overflow-y: auto;
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, .16); overscroll-behavior: contain;
 }
@@ -840,8 +840,21 @@ html[data-farm-theme="color"][data-farm-light] .btn.primary { background: var(--
 .item-row.clickable { cursor: pointer; }
 .item-row.clickable:hover { border-color: var(--brand); }
 .item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-@media (max-width: 600px) { .item-row { flex-wrap: wrap; } .item-actions { order: 3; width: 100%; justify-content: flex-start; padding-left: 52px; } }
+/* Утсан дээр: товчнууд жижгэрч мөртэйгээ нэг эгнээнд багтана */
+@media (max-width: 600px) {
+  .item-row { gap: 8px; padding: 8px 10px; }
+  .item-icon { flex-basis: 36px; width: 36px; height: 36px; font-size: 20px; }
+  .item-actions { flex-wrap: nowrap; gap: 4px; }
+  .item-row .item-actions .btn.small { padding: 4px 7px; font-size: 12px; min-height: 0; height: 28px; white-space: nowrap; }
+  .item-chevron { font-size: 18px; }
+}
 .item-row:not(.clickable) { cursor: default; }
 /* Санал болгох утгагүй талбарт сум харуулахгүй; утсан дээр жагсаалт хуруугаар гүйлгэгдэнэ */
 input.combo-input.no-list { background-image: none; padding-right: 12px; }
 .combo-list { -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+/* Маягтын доорх нэмэлт мэдээлэл (жинлэлтийн түүх) */
+.form-footer:empty { display: none; }
+.form-footer { padding: 4px 0 18px; }
+.form-footer-title { font-size: 14px; margin: 4px 0 8px; }
+.form-footer td.pos { color: var(--brand); }
+.form-footer td.neg { color: #d9534f; }
