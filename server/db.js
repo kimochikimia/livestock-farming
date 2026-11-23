@@ -115,6 +115,7 @@ const SCHEMA = [
   ) ${T}`,
   `CREATE TABLE IF NOT EXISTS feeds (id INT AUTO_INCREMENT PRIMARY KEY, ${FARM}, name VARCHAR(100) NOT NULL, price DOUBLE NULL, UNIQUE KEY uq_feed (farm_id, name)) ${T}`,
   `CREATE TABLE IF NOT EXISTS expense_types (id INT AUTO_INCREMENT PRIMARY KEY, ${FARM}, name VARCHAR(100) NOT NULL, UNIQUE KEY uq_et (farm_id, name)) ${T}`,
+  `CREATE TABLE IF NOT EXISTS treatment_types (id INT AUTO_INCREMENT PRIMARY KEY, ${FARM}, name VARCHAR(100) NOT NULL, UNIQUE KEY uq_trt (farm_id, name)) ${T}`,
   `CREATE TABLE IF NOT EXISTS tag_colors (id INT AUTO_INCREMENT PRIMARY KEY, ${FARM}, name VARCHAR(50) NOT NULL, UNIQUE KEY uq_tc (farm_id, name)) ${T}`,
   `CREATE TABLE IF NOT EXISTS task_types (id INT AUTO_INCREMENT PRIMARY KEY, ${FARM}, name VARCHAR(100) NOT NULL,
     needs_animals TINYINT NOT NULL DEFAULT 0, UNIQUE KEY uq_tt (farm_id, name)) ${T}`,
@@ -135,6 +136,13 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS weighings (
     id INT AUTO_INCREMENT PRIMARY KEY, ${FARM},
     date DATE NOT NULL, animal_id INT NOT NULL, weight DOUBLE NOT NULL, note VARCHAR(500) NULL, ${CREATED},
+    FOREIGN KEY (animal_id) REFERENCES animals(id) ON DELETE CASCADE, INDEX (animal_id, date)
+  ) ${T}`,
+  // Эмчилгээ / вакцины бүртгэл (мал тус бүрт)
+  `CREATE TABLE IF NOT EXISTS treatments (
+    id INT AUTO_INCREMENT PRIMARY KEY, ${FARM},
+    date DATE NOT NULL, animal_id INT NOT NULL, kind VARCHAR(20) NOT NULL DEFAULT 'Эмчилгээ', name VARCHAR(200) NOT NULL,
+    medicine VARCHAR(200) NULL, dose VARCHAR(100) NULL, vet VARCHAR(100) NULL, next_date DATE NULL, note VARCHAR(500) NULL, ${CREATED},
     FOREIGN KEY (animal_id) REFERENCES animals(id) ON DELETE CASCADE, INDEX (animal_id, date)
   ) ${T}`,
   `CREATE TABLE IF NOT EXISTS expenses (
@@ -249,6 +257,11 @@ async function init() {
   }
   await ensureColumn('feed_plan', 'age_name', 'VARCHAR(100) NULL');
   await ensureColumn('feed_plan', 'sex', 'VARCHAR(20) NULL');
+  // Эмчилгээний төрөл (Тохиргоо): хоосон фермүүдэд анхдагч "Эмчилгээ", "Вакцин" + бүртгэлд ашигласан төрлүүд
+  await pool.query(`INSERT IGNORE INTO treatment_types(farm_id, name)
+    SELECT f.id, x.name FROM farms f JOIN (SELECT 'Эмчилгээ' AS name UNION SELECT 'Вакцин') x
+    WHERE NOT EXISTS (SELECT 1 FROM treatment_types t WHERE t.farm_id = f.id)`);
+  await pool.query('INSERT IGNORE INTO treatment_types(farm_id, name) SELECT DISTINCT farm_id, kind FROM treatments');
   // Фермийн өнгө (фермүүдийг ялгаж харуулна), #rrggbb
   await ensureColumn('farms', 'color', 'VARCHAR(7) NULL');
   // Зургийн төрөл: NULL — үндсэн зураг, 'tag' — малын ээмгийн зураг
@@ -316,6 +329,7 @@ const COPYABLE = {
   feeds: ['name', 'price', 'bale_kg'],
   expense_types: ['name'],
   tag_colors: ['name'],
+  treatment_types: ['name'],
   task_types: ['name', 'needs_animals'],
   breeding: ['species', 'dam_name', 'births_per_year', 'gestation', 'breeding_months', 'birthing_months'],
   feed_plan: ['species', 'age_name', 'sex', 'feed_name', 'kg_1_14', 'kg_15_30', 'kg_31_90', 'price'],

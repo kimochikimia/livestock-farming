@@ -129,6 +129,7 @@ const NAV = [
   { path: 'dashboard', farm: true, module: 'dashboard', label: 'Хянах самбар', icon: '▦' },
   { path: 'animals', farm: true, module: 'animals', label: 'Малын бүртгэл', icon: '◉' },
   { path: 'weighings', farm: true, module: 'weighings', label: 'Жинлэлт', icon: '⚖' },
+  { path: 'treatments', farm: true, module: 'treatments', label: 'Эмчилгээ', icon: '✚' },
   // "Тэжээл" бүлэг: бүртгэл (үлдэгдэл, зарцуулалт) ба тооцоо (өртөг, төлөвлөгөө, жор)
   { group: 'feedgroup', farm: true, label: 'Тэжээл', icon: '❦' },
   { path: 'feed', farm: true, parent: 'feedgroup', module: 'feed', label: 'Тэжээлийн бүртгэл', permLabel: 'Тэжээл', icon: '▤' },
@@ -140,6 +141,7 @@ const NAV = [
   { group: 'finance', farm: true, label: 'Санхүү', icon: '₮' },
   { path: 'expenses', farm: true, parent: 'finance', module: 'expenses', label: 'Зардлын бүртгэл', icon: '⊖' },
   { path: 'sales', farm: true, parent: 'finance', module: 'sales', label: 'Борлуулалтын бүртгэл', icon: '⊕' },
+  { path: 'profitshare', farm: true, parent: 'finance', module: 'dashboard', label: 'Ашиг хуваарилалт', icon: '%' },
   { path: 'tasks', farm: true, module: 'tasks', label: 'Хуваарьт ажил', icon: '☑', badge: () => state.lk?.tasksDue },
   // Зах зээлийн судалгаа → Тохиргоо → "Зах зээл" таб
   { path: 'settings', farm: true, full: true, label: 'Тохиргоо', icon: '⚙' },
@@ -510,6 +512,7 @@ async function crudSection(container, cfg) {
 
   function draw() {
     const list = filtered();
+    if (cfg.card) { drawCards(list); return; }
     tbody.replaceChildren(...list.map(r => h('tr', {
       class: (canWrite && !r.auto) || autoOpen(r) ? 'clickable' : r.auto ? 'auto-row' : null,
       onclick: r.auto ? autoOpen(r) : canWrite ? () => openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel) : null
@@ -523,6 +526,25 @@ async function crudSection(container, cfg) {
         return h('td', {}, i === 0 ? 'Нийт' : '');
       }), showActions ? h('td') : null));
     }
+    count.textContent = list.length + ' бичлэг';
+  }
+
+  // Картан жагсаалт (cfg.card(r) → { icon, img, title, sub, badge }): мөр дээр дарахад засах маягт нээгдэнэ
+  const cardList = h('div', { class: 'item-list' });
+  function drawCards(list) {
+    cardList.replaceChildren(
+      h('div', { class: 'item-list-head' }, h('strong', {}, cfg.cardTitle || cfg.title), h('span', { class: 'muted' }, 'Бүгд · ' + list.length)),
+      ...(list.length ? list : []).map(r => {
+        const c = cfg.card(r);
+        const open = canWrite && !r.auto ? () => openForm(cfg.rowCfg?.(r) || cfg, r, refresh, canDel) : null;
+        return h('div', { class: 'item-row' + (open ? ' clickable' : ''), role: open ? 'button' : null, tabindex: open ? 0 : null, onclick: open,
+          onkeydown: open ? e => { if (e.key === 'Enter' && e.target === e.currentTarget) open(); } : null },
+          h('span', { class: 'item-icon', 'aria-hidden': 'true' }, c.img ? h('img', { src: c.img, loading: 'lazy', alt: '' }) : c.icon),
+          h('span', { class: 'item-text' }, h('span', { class: 'item-title' }, c.title, c.badge ? h('span', {}, ' ', c.badge) : null), h('span', { class: 'item-sub' }, c.sub)),
+          c.actions?.length ? h('span', { class: 'item-actions' }, c.actions) : null,
+          open ? h('span', { class: 'item-chevron', 'aria-hidden': 'true' }, '›') : null);
+      }),
+      ...(list.length ? [] : [h('p', { class: 'empty' }, cfg.empty || 'Бичлэг алга')]));
     count.textContent = list.length + ' бичлэг';
   }
 
@@ -545,7 +567,8 @@ async function crudSection(container, cfg) {
   container.replaceChildren(
     h('section', { class: 'card' },
       toolbar,
-      h('div', { class: 'table-wrap' },
+      cfg.card ? cardList : null,
+      h('div', { class: 'table-wrap', hidden: !!cfg.card },
         h('table', { class: 'data' }, thead = h('thead', {},
           h('tr', {}, cfg.columns.map(c => {
             if (!c.label) return h('th', {});
@@ -1157,8 +1180,14 @@ PAGES.dashboard = async main => {
       d.recentWeighings.length ? h('section', { class: 'card' }, h('div', { class: 'toolbar' }, h('h2', {}, 'Сүүлийн жинлэлтүүд'), canMod('weighings') ? h('a', { class: 'btn ghost small', href: '#/weighings' }, 'Бүгд') : null),
         sortableTable({ class: 'data compact' },
           h('thead', {}, h('tr', {}, h('th', {}, 'Огноо'), h('th', {}, 'ID'), h('th', { class: 'num' }, 'Жин'))),
-          h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null),
-    d.partners.length ? partnerProfitCard(d, () => PAGES.dashboard(main)) : null);
+          h('tbody', {}, d.recentWeighings.map(w => h('tr', {}, h('td', {}, w.date), h('td', {}, w.tag_id), h('td', { class: 'num' }, FMT.kg(w.weight))))))) : null));
+};
+
+// Санхүү → Ашиг хуваарилалт: хөрөнгө оруулагчдын ашиг
+PAGES.profitshare = async main => {
+  const d = await api('GET', '/api/dashboard');
+  fill(main, d.partners.length ? partnerProfitCard(d, () => PAGES.profitshare(main))
+    : h('section', { class: 'card' }, h('p', { class: 'muted' }, 'Хөрөнгө оруулагч бүртгэгдээгүй байна.')));
 };
 
 // Хөрөнгө оруулагчдын ашиг: хуваарилалтын арга (хувиар / зардлыг буцааж) ба татвар тооцох эсэх
@@ -1183,7 +1212,9 @@ function partnerProfitCard(d, rerender) {
         h('label', { class: 'chip' }, taxCb, 'Татвар тооцох'), rate ? h('span', {}, rate, ' %') : null,
         full ? h('a', { class: 'btn ghost small', href: '#/settings?tab=general' }, 'Удирдах') : null)),
     h('p', { class: 'small', style: 'margin:0 0 8px' },
-      h('span', {}, 'Ашиг ', h('b', {}, FMT.money(d.profit))),
+      h('span', {}, 'Борлуулалт ', h('b', {}, FMT.money(d.salesTotal))),
+      h('span', {}, ' − Зардал ', h('b', {}, FMT.money(d.expenseTotal))),
+      h('span', {}, ' = Ашиг ', h('b', {}, FMT.money(d.profit))),
       D.taxOn ? h('span', {}, ` · Татвар (${D.taxRate}%) `, h('b', {}, FMT.money(D.tax))) : null,
       D.taxOn ? h('span', {}, ' · Татварын дараах ашиг ', h('b', {}, FMT.money(D.netProfit))) : null),
     sortableTable({ class: 'data compact' },
@@ -1285,7 +1316,24 @@ PAGES.animals = main => {
   ];
   let view = 'summary';
   try { view = localStorage.getItem('tsf.animalView') === 'detail' ? 'detail' : 'summary'; } catch { /* */ }
-  const apply = () => { cfg.columns = [photoColumn('animals'), ...(view === 'detail' ? detail : summary)]; cfg._photoCol = true; };
+  // Хураангуй = картан жагсаалт (зураг/төрлийн тэмдэг, одоогийн насны нэршил, ID · хүйс · сүүлийн жин)
+  const SPECIES_ICON = { 'Үхэр': '🐄', 'Хонь': '🐑', 'Ямаа': '🐐', 'Адуу': '🐎', 'Тэмээ': '🐫' };
+  const animalCard = r => ({
+    img: r.photo_first ? `/api/photo/${r.photo_first}` : null,
+    icon: SPECIES_ICON[r.species] || '◉',
+    title: r.current_age_name || r.age_name || r.species,
+    badge: r.state && r.state !== 'Идэвхтэй' ? badge(r.state) : null,
+    sub: [`№ ${r.tag_id}`, r.sex, r.last_weight != null ? FMT.kg(r.last_weight) : r.initial_weight != null ? FMT.kg(r.initial_weight) : null].filter(Boolean).join(' · '),
+    actions: r.state === 'Идэвхтэй' || r.state === 'Бой товлогдсон' ? [
+      canMod('weighings', 2) ? quickBtn('⚖ Жин', () => openForm(QUICK_WEIGH_CFG, null, () => cfg.onChange(), false, { tag_id: r.tag_id })) : null,
+      canMod('treatments', 2) ? quickBtn('✚ Эмчилгээ', () => openForm(TREATMENT_CFG, null, () => {}, false, { tag_id: r.tag_id })) : null
+    ].filter(Boolean) : []
+  });
+  const apply = () => {
+    cfg.columns = [photoColumn('animals'), ...(view === 'detail' ? detail : summary)]; cfg._photoCol = true;
+    cfg.card = view === 'detail' ? null : animalCard;
+  };
+  cfg.cardTitle = 'Миний мал';
   const viewBtn = (v, label) => h('button', { type: 'button', class: 'seg' + (view === v ? ' active' : ''), 'aria-pressed': String(view === v),
     onclick: () => {
       if (view === v) return;
@@ -1315,6 +1363,68 @@ PAGES.animals = main => {
   drawBoard().catch(() => {});
   return crudSection(listBox, cfg);
 };
+
+// Картан жагсаалтын жижиг товч (мөрийн дарах үйлдлийг өдөөхгүй)
+const quickBtn = (label, onclick) => h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); onclick(); } }, label);
+// Идэвхтэй малын ID-ийн сонголт (тухайн мал сонгогдсон бол түүнийг ч оруулна)
+const activeTagOptions = v => [...new Set([...activeTags(), v?.tag_id].filter(Boolean))].map(t => [t, t]);
+// Малын карт дээрх "Жин": энгийн жинлэлтийн маягт
+const QUICK_WEIGH_CFG = {
+  res: 'weighings', module: 'weighings', itemName: 'жинлэлт',
+  fields: [
+    { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
+    { k: 'tag_id', label: 'Малын ID', type: 'select', req: true, options: activeTagOptions },
+    { k: 'weight', label: 'Жин (кг)', type: 'number', req: true },
+    { k: 'note', label: 'Тэмдэглэл', full: true }
+  ]
+};
+
+// ----- Эмчилгээ: мал тус бүрт хийсэн эмчилгээ, вакцины бүртгэл -----
+let treatmentRows = [];
+const TREATMENT_CFG = {
+  res: 'treatments', module: 'treatments', title: 'Эмчилгээ, вакцины бүртгэл', itemName: 'эмчилгээ', addLabel: '+ Эмчилгээ бүртгэх',
+  columns: [
+    { k: 'date', label: 'Огноо' },
+    { k: 'tag_id', label: 'Малын ID', render: r => h('span', { class: 'tag' }, r.tag_id), csv: r => r.tag_id },
+    { k: 'species', label: 'Мал', render: r => [r.species, r.age_name, r.sex].filter(Boolean).join(' · '), csv: r => [r.species, r.age_name, r.sex].filter(Boolean).join(' ') },
+    { k: 'kind', label: 'Төрөл', render: r => badge(r.kind === 'Вакцин' ? 'Төлөвлөсөн' : 'Бүртгэсэн', r.kind), csv: r => r.kind },
+    { k: 'name', label: 'Өвчин / вакцин', cls: 'wrap-cell' },
+    { k: 'medicine', label: 'Эм, тариа', cls: 'wrap-cell' }, { k: 'dose', label: 'Тун' },
+    { k: 'vet', label: 'Мал эмч' },
+    { k: 'next_date', label: 'Дараагийн тун', render: r => (r.next_date ? h('span', { class: r.next_date < today() ? 'warn' : '' }, r.next_date) : ''), csv: r => r.next_date },
+    { k: 'note', label: 'Тэмдэглэл', cls: 'wrap-cell wide' }
+  ],
+  filters: [{ k: 'kind', label: 'Төрөл', options: rows => uniq(rows, 'kind') }, { k: 'species', label: 'Мал', options: rows => uniq(rows, 'species') }],
+  fields: [
+    { k: 'date', label: 'Огноо', type: 'date', req: true, def: today },
+    { k: 'tag_id', label: 'Малын ID', type: 'select', req: true, options: activeTagOptions },
+    { k: 'kind', label: 'Төрөл', type: 'select', req: true, def: () => state.lk.suggest.treatmentType[0] ?? '', options: () => opt(state.lk.suggest.treatmentType),
+      emptyText: () => 'Тохиргоо → Эмчилгээний төрөл хоосон байна' },
+    { k: 'name', label: 'Өвчин / вакцины нэр', req: true, maxlength: 200, suggest: v => uniq(treatmentRows.filter(r => r.kind === v.kind), 'name') },
+    { k: 'medicine', label: 'Эм, тариа', maxlength: 200, suggest: () => uniq(treatmentRows, 'medicine') },
+    { k: 'dose', label: 'Тун', maxlength: 100 },
+    { k: 'vet', label: 'Мал эмч', maxlength: 100, suggest: () => uniq(treatmentRows, 'vet') },
+    { k: 'next_date', label: 'Дараагийн тун', type: 'date' },
+    { k: 'note', label: 'Тэмдэглэл', full: true }
+  ]
+};
+// Самбар: нийт, энэ сард, вакцинжуулсан мал, дараагийн тун (14 хоногт / хоцорсон)
+function treatmentBoard(rows) {
+  const t = today(), soon = addDays(t, 14);
+  // Мал + нэр тус бүрийн сүүлийн бичлэгийн дараагийн тун
+  const last = new Map();
+  for (const r of rows) { const k = r.animal_id + '|' + r.name; if (!last.has(k)) last.set(k, r); }
+  const due = [...last.values()].filter(r => r.next_date);
+  const overdue = due.filter(r => r.next_date < t), upcoming = due.filter(r => r.next_date >= t && r.next_date <= soon);
+  const month = rows.filter(r => r.date?.startsWith(t.slice(0, 7)));
+  return [
+    kpiCard('Нийт бүртгэл', `${rows.length}`, [...rows.reduce((m, r) => m.set(r.kind, (m.get(r.kind) || 0) + 1), new Map())].map(([k, n]) => `${k} ${n}`).join(' · ') || null),
+    kpiCard('Энэ сард', `${month.length}`, `${new Set(month.map(r => r.animal_id)).size} мал`),
+    kpiCard('14 хоногт дараагийн тун', `${upcoming.length}`, upcoming.slice(0, 6).map(r => `${r.tag_id} (${r.next_date.slice(5)})`).join(', ') || null),
+    kpiCard('Хоцорсон тун', `${overdue.length}`, overdue.slice(0, 6).map(r => r.tag_id).join(', ') || null, overdue.length ? 'neg' : '')
+  ];
+}
+PAGES.treatments = main => crudWithBoard(main, TREATMENT_CFG, rows => { treatmentRows = rows; return treatmentBoard(rows); });
 
 const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
@@ -2420,6 +2530,10 @@ const SETTING_TABS = [
     columns: [{ k: 'name', label: 'Тэжээл' }, { k: 'price', label: 'Үнэ ₮/кг', f: 'money' }, { k: 'bale_kg', label: '1 боодлын жин', f: 'kg' }],
     fields: [{ k: 'name', label: 'Тэжээл', req: true }, { k: 'price', label: 'Үнэ ₮/кг', type: 'number' },
       { k: 'bale_kg', label: '1 боодлын жин (кг)', type: 'number' }] }) },
+  { id: 'treatment_types', label: 'Эмчилгээний төрөл', cfg: () => ({
+    res: 'treatment_types', title: 'Эмчилгээний төрөл', itemName: 'эмчилгээний төрөл', write: 'admin', rowActions: true,
+    columns: [{ k: 'name', label: 'Эмчилгээний төрөл' }],
+    fields: [{ k: 'name', label: 'Эмчилгээний төрөл', req: true, maxlength: 100 }] }) },
   { id: 'expense_types', label: 'Зардлын төрөл', cfg: () => ({
     res: 'expense_types', title: 'Зардлын төрөл', itemName: 'зардлын төрөл', write: 'admin', rowActions: true,
     columns: [{ k: 'name', label: 'Зардлын төрөл' }],

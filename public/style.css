@@ -822,3 +822,23 @@ html[data-farm-theme="color"][data-farm-light] .btn.primary { background: var(--
 .photo-panel.third { gap: 4px; }
 .photo-panel.third .photo-status:empty { display: none; }
 .photo-panel.third .photo-actions .btn { flex: 1 1 100%; height: 37px; min-width: 0; padding-left: 6px; padding-right: 6px; }
+
+/* Картан жагсаалт (Малын бүртгэл → Хураангуй) */
+.item-list { display: flex; flex-direction: column; gap: 8px; }
+.item-list-head { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 4px 4px; font-size: 15px; }
+.item-list-head .muted { font-size: 13px; color: var(--brand); font-weight: 600; }
+.item-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 10px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; }
+.item-row:hover:not(:disabled) { border-color: var(--brand); }
+.item-row:disabled { cursor: default; opacity: 1; }
+.item-icon { flex: 0 0 40px; width: 40px; height: 40px; border-radius: 10px; background: var(--brand-soft); display: grid; place-items: center; font-size: 22px; overflow: hidden; }
+.item-icon img { width: 100%; height: 100%; object-fit: cover; }
+.item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.item-title { font-weight: 700; }
+.item-sub { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item-chevron { color: var(--muted); font-size: 22px; line-height: 1; }
+.table-wrap[hidden] { display: none; }
+.item-row.clickable { cursor: pointer; }
+.item-row.clickable:hover { border-color: var(--brand); }
+.item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 600px) { .item-row { flex-wrap: wrap; } .item-actions { order: 3; width: 100%; justify-content: flex-start; padding-left: 52px; } }
+.item-row:not(.clickable) { cursor: default; }

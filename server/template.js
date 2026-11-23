@@ -11,6 +11,7 @@ const CLASSES = {
 };
 const FEEDS = ['Өвс (хадлан)', 'Царгас', 'Сүрэл', 'Хивэг', 'Арвай', 'Овъёос', 'Ногоон тэжээл', 'Эрдэс нэмэлт'];
 const EXPENSE_TYPES = ['Мал авсан', 'Тэжээл', 'Тээвэр', 'Цахилгаан', 'Бинзен', 'Ус', 'Бусад'];
+const TREATMENT_TYPES = ['Эмчилгээ', 'Вакцин'];
 const TASK_TYPES = [['Жинлэх', 1], ['Вакцин', 1], ['Мал эмнэлэг', 1], ['Тэжээл татах', 0], ['Бусад', 0]];
 const BREEDING = [
   ['Үхэр', 'Үнээ', 1, '280–285 хоног', '5–9 сар', '3–7 сар'],
@@ -40,6 +41,7 @@ async function applyTemplate(c, farmId) {
     }
   }
   for (const name of FEEDS) count('feeds', (await c.run('INSERT IGNORE INTO feeds(farm_id, name) VALUES(?, ?)', [farmId, name])).changes);
+  for (const name of TREATMENT_TYPES) count('treatment_types', (await c.run('INSERT IGNORE INTO treatment_types(farm_id, name) VALUES(?, ?)', [farmId, name])).changes);
   for (const name of EXPENSE_TYPES) count('expense_types', (await c.run('INSERT IGNORE INTO expense_types(farm_id, name) VALUES(?, ?)', [farmId, name])).changes);
   for (const [name, na] of TASK_TYPES) count('task_types', (await c.run('INSERT IGNORE INTO task_types(farm_id, name, needs_animals) VALUES(?, ?, ?)', [farmId, name, na])).changes);
   if (!(await c.one('SELECT 1 x FROM breeding WHERE farm_id = ? LIMIT 1', [farmId]))) {

@@ -343,6 +343,37 @@ const resources = {
       ORDER BY w.date DESC, w.id DESC`, [farmId]))
   },
 
+  // Эмчилгээ, вакцин: мал тус бүрт (дараагийн тунгийн огноо — сануулга)
+  treatments: {
+    table: 'treatments', title: 'Эмчилгээ', track: true, describe: v => `${v.kind} · ${v.name}`,
+    fields: {
+      date: { t: 'date', req: true, label: 'Огноо' },
+      tag_id: { t: 'text', req: true, max: 50, label: 'Малын ID' },
+      kind: { t: 'text', req: true, max: 100, label: 'Төрөл' },
+      name: { t: 'text', req: true, max: 200, label: 'Өвчин / вакцин' },
+      medicine: { t: 'text', max: 200, label: 'Эм, тариа' },
+      dose: { t: 'text', max: 100, label: 'Тун' },
+      vet: { t: 'text', max: 100, label: 'Мал эмч' },
+      next_date: { t: 'date', label: 'Дараагийн тун' },
+      note: { t: 'text', max: 500, label: 'Тэмдэглэл' }
+    },
+    async prepare(v, db, farmId, id) {
+      // Төрөл нь Тохиргоо → Эмчилгээний төрөл-д байх ёстой (засахад хуучин утгыг хэвээр үлдээж болно)
+      const tt = await db.one('SELECT name FROM treatment_types WHERE farm_id = ? AND name = ?', [farmId, v.kind]);
+      const old = id ? await db.one('SELECT kind FROM treatments WHERE id = ? AND farm_id = ?', [id, farmId]) : null;
+      if (tt) v.kind = tt.name;
+      else if (!old || old.kind !== v.kind) throw new HttpError(400, `"${v.kind}" төрөл Тохиргоо → Эмчилгээний төрөл-д бүртгэлгүй байна`);
+      const a = await resolveTag(v, db, farmId);
+      if (v.date < a.purchase_date) throw new HttpError(400, `${a.tag_id}: огноо (${v.date}) малыг авсан өдрөөс (${a.purchase_date}) өмнө байж болохгүй`);
+      if (v.next_date && v.next_date < v.date) throw new HttpError(400, 'Дараагийн тунгийн огноо эмчилгээний огнооноос өмнө байж болохгүй');
+    },
+    list: async (db, farmId) => withCurrentAgeName(db, farmId, await db.q(`
+      SELECT t.*, a.tag_id, a.species, a.age_name, a.sex
+      FROM treatments t JOIN animals a ON a.id = t.animal_id
+      WHERE t.farm_id = ?
+      ORDER BY t.date DESC, t.id DESC`, [farmId]))
+  },
+
   expenses: {
     table: 'expenses', title: 'Зардал', track: true, photos: true, describe: v => (v.feed_name ? `${v.type} · ${v.feed_name}` : v.type),
     // Худалдаж авсан тэжээлийг "Тэжээлийн бүртгэл"-ээс бүртгэнэ — тэжээлийн эрхтэй хэрэглэгч ч нэмж чадна
@@ -729,6 +760,25 @@ const resources = {
       if (used) throw new HttpError(409, `"${old.name}" тэжээлээр зардал/зарцуулалт бүртгэгдсэн тул устгах боломжгүй`);
     }
   },
+  // Эмчилгээний төрөл: нэрийг солиход бүртгэлийн төрлийг хамт шинэчилнэ, ашигласан төрлийг устгахгүй
+  treatment_types: {
+    table: 'treatment_types', title: 'Эмчилгээний төрөл', settings: true, describe: v => v.name,
+    fields: { name: { t: 'text', req: true, max: 100, label: 'Эмчилгээний төрөл' } },
+    async prepare(v, db, farmId, id) {
+      if (!id) return;
+      const old = await db.one('SELECT name FROM treatment_types WHERE id = ? AND farm_id = ?', [id, farmId]);
+      if (!old || old.name === v.name) return;
+      if (await db.one('SELECT 1 x FROM treatment_types WHERE farm_id = ? AND name = ? AND id <> ?', [farmId, v.name, id])) {
+        throw new HttpError(409, `"${v.name}" төрөл аль хэдийн бүртгэгдсэн байна`);
+      }
+      return c => c.run('UPDATE treatments SET kind = ? WHERE farm_id = ? AND kind = ?', [v.name, farmId, old.name]);
+    },
+    async beforeDelete(old, db, farmId) {
+      if (await db.one('SELECT 1 x FROM treatments WHERE farm_id = ? AND kind = ? LIMIT 1', [farmId, old.name])) {
+        throw new HttpError(409, `"${old.name}" төрлөөр эмчилгээ бүртгэгдсэн тул устгах боломжгүй`);
+      }
+    }
+  },
   expense_types: {
     table: 'expense_types', title: 'Зардлын төрөл', settings: true, describe: v => v.name,
     fields: { name: { t: 'text', req: true, max: 100, label: 'Зардлын төрөл' } }
@@ -832,6 +882,7 @@ const resources = {
 const RESOURCE_MODULES = {
   animals: ['animals', ['animals', 'growth', 'sell', 'weighings', 'slaughter']],
   weighings: ['weighings'],
+  treatments: ['treatments'],
   expenses: ['expenses'],
   slaughters: [['sell', 'slaughter'], ['sell', 'slaughter']],
   sales: ['sales'],

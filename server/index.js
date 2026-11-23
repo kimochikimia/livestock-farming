@@ -18,7 +18,7 @@ const COOKIE_SECURE = process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === 
 const LEVEL = { viewer: 1, editor: 2, admin: 3 };
 const ROLES = Object.keys(LEVEL);
 const STATUSES = ['pending', 'approved', 'rejected', 'blocked'];
-const MODULES = ['dashboard', 'animals', 'feed', 'weighings', 'growth', 'sell', 'slaughter', 'expenses', 'sales', 'market', 'tasks'];
+const MODULES = ['dashboard', 'animals', 'feed', 'weighings', 'treatments', 'growth', 'sell', 'slaughter', 'expenses', 'sales', 'market', 'tasks'];
 
 const app = express();
 app.set('trust proxy', 1);
@@ -598,6 +598,7 @@ app.get('/api/lookups', async (req, res) => {
       ageName: await col('SELECT age_name AS v FROM animal_classes WHERE farm_id = ? UNION SELECT DISTINCT age_name FROM animals WHERE farm_id = ? AND age_name IS NOT NULL ORDER BY 1', [fid, fid]),
       age: await col('SELECT age AS v FROM animal_classes WHERE farm_id = ? UNION SELECT DISTINCT age FROM animals WHERE farm_id = ? AND age IS NOT NULL ORDER BY 1', [fid, fid]),
       tagColor: await col('SELECT name AS v FROM tag_colors WHERE farm_id = ? ORDER BY id', [fid]),
+      treatmentType: await col('SELECT name AS v FROM treatment_types WHERE farm_id = ? ORDER BY id', [fid]),
       taskType: await col('SELECT name AS v FROM task_types WHERE farm_id = ? ORDER BY id', [fid]),
       taskTypes: await db.q('SELECT name, needs_animals FROM task_types WHERE farm_id = ? ORDER BY id', [fid]),
       // Хариуцагч: фермийн эзэмшигч + өмнө бичсэн нэрс (бусад хэрэглэгчийн нэрийг ил гаргахгүй)
