@@ -1447,7 +1447,12 @@ function openLoss(a, onDone) {
 }
 
 // Картан жагсаалтын жижиг товч (мөрийн дарах үйлдлийг өдөөхгүй)
-const quickBtn = (label, onclick) => h('button', { type: 'button', class: 'btn ghost small', onclick: e => { e.stopPropagation(); onclick(); } }, label);
+// Утсан дээр зөвхөн тэмдэг (⚖ ✚ ✖) харагдана — нэр нь title/aria-label-д
+const quickBtn = (label, onclick) => {
+  const [icon, ...rest] = label.split(' '); const text = rest.join(' ');
+  return h('button', { type: 'button', class: 'btn ghost small quick-btn', title: text, 'aria-label': text, onclick: e => { e.stopPropagation(); onclick(); } },
+    h('span', { class: 'qb-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'qb-text' }, text));
+};
 // Идэвхтэй малын ID-ийн сонголт (тухайн мал сонгогдсон бол түүнийг ч оруулна)
 const activeTagOptions = v => [...new Set([...activeTags(), v?.tag_id].filter(Boolean))].map(t => [t, t]);
 // Малын карт дээрх "Жин": энгийн жинлэлтийн маягт
